@@ -1,13 +1,10 @@
 [project]
 name = "sefirot"
-version = "0.1.0"
-description = "Claude Code orchestration framework for semi-automated development"
+version = "0.3.0"
+description = "Claude Code multi-agent orchestration framework"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.0.0",
     "click>=8.0",
-    "pyyaml>=6.0",
-    "watchdog>=4.0",
 ]
 
 [dependency-groups]

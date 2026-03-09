@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import os
+import json
+import logging
 import sys
 from pathlib import Path
 
 import click
-
-from sefirot.state import SefirotState
 
 
 def _find_root() -> Path:
@@ -21,207 +20,167 @@ def _find_root() -> Path:
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
-def main() -> None:
-    """Sefirot - Claude Codeマルチエージェント開発オーケストレーションフレームワーク。
+@click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
+def main(verbose: bool) -> None:
+    """Sefirot - Claude Code multi-agent orchestration framework."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
-    人間が判断し、AIが実装する半自動ワークフローを提供します。
-    """
-    pass
+
+# --- Loop command (core) ---
+
+
+@main.command()
+@click.option("--from-skill", is_flag=True, help="Called from Claude Code skill (enables question queue)")
+@click.option("--milestone", "-m", type=int, default=None, help="Run specific milestone only")
+@click.option("--dry-run", is_flag=True, help="Show execution plan without running")
+@click.option("--max-parallel", type=int, default=8, help="Max concurrent builders")
+@click.option("--model", default="opus", help="Claude model to use")
+def loop(
+    from_skill: bool,
+    milestone: int | None,
+    dry_run: bool,
+    max_parallel: int,
+    model: str,
+) -> None:
+    """Run the Planner → Builder → Verifier loop."""
+    from sefirot.loop import LoopEngine
+
+    root = _find_root()
+    engine = LoopEngine(
+        root,
+        from_skill=from_skill,
+        milestone=milestone,
+        dry_run=dry_run,
+        max_parallel=max_parallel,
+        model=model,
+    )
+    rc = engine.run()
+    sys.exit(rc)
+
+
+# --- Status command ---
+
+
+@main.command()
+def status() -> None:
+    """Show milestones.json status summary."""
+    root = _find_root()
+    ms_file = root / "milestones.json"
+
+    if not ms_file.exists():
+        click.echo("No milestones.json found. Run /plan and /gen-milestones first.", err=True)
+        sys.exit(1)
+
+    data = json.loads(ms_file.read_text(encoding="utf-8"))
+    milestones = data.get("milestones", [])
+
+    for ms in milestones:
+        done_mark = "DONE" if ms.get("done") else "    "
+        tasks = ms.get("tasks", [])
+        done_tasks = sum(1 for t in tasks if t.get("done"))
+        click.echo(
+            f"[{done_mark}] Milestone {ms['milestone']}: {ms.get('goal', '')[:60]}"
+            f"  ({done_tasks}/{len(tasks)} tasks)"
+        )
+        for t in tasks:
+            t_mark = "x" if t.get("done") else " "
+            click.echo(f"  [{t_mark}] W{t.get('wave', '?')} {t['id']}: {t.get('description', '')[:50]}")
+
+    questions = data.get("questions", [])
+    if questions:
+        click.echo(f"\nPending questions: {len(questions)}")
+        for q in questions:
+            click.echo(f"  - [{q.get('agent', '?')}] {q.get('question', '')[:60]}")
+
+
+# --- Init/Deinit ---
 
 
 @main.command()
 def init() -> None:
-    """現在のプロジェクトにsefirotを初期化する。"""
-    from sefirot.installer import init_project
-
+    """Initialize sefirot in the current project."""
     root = Path.cwd()
-    actions = init_project(root)
+    sefirot_dir = root / ".sefirot"
+
+    if sefirot_dir.exists():
+        click.echo("Already initialized.", err=True)
+        sys.exit(1)
+
+    # Create directory structure
+    (sefirot_dir / "sessions").mkdir(parents=True)
+    (sefirot_dir / "prompts").mkdir(parents=True)
+
+    # Copy default prompts from package templates
+    templates_dir = Path(__file__).parent / "templates" / "prompts"
+    if templates_dir.is_dir():
+        import shutil
+        for f in templates_dir.glob("*.md"):
+            shutil.copy2(f, sefirot_dir / "prompts" / f.name)
+
     click.echo("Sefirot initialized:")
-    for action in actions:
-        click.echo(f"  - {action}")
+    click.echo(f"  - Created {sefirot_dir}")
+    click.echo(f"  - Copied prompt templates to {sefirot_dir / 'prompts'}")
     click.echo()
-    click.echo("Next: run `claude` and use `/sefirot` to activate PM mode.")
+    click.echo("Next steps:")
+    click.echo("  1. Install skills: npx skills add agarichan/sefirot")
+    click.echo("  2. /plan <description> - Create a design document")
+    click.echo("  3. /gen-milestones <doc> - Generate milestones.json")
+    click.echo("  4. sefirot loop - Run the build loop")
 
 
 @main.command()
 def deinit() -> None:
-    """現在のプロジェクトからsefirotを削除する。"""
-    from sefirot.installer import deinit_project
-
+    """Remove sefirot from the current project."""
     root = _find_root()
-    if not (root / ".sefirot").is_dir():
+    sefirot_dir = root / ".sefirot"
+
+    if not sefirot_dir.is_dir():
         click.echo("Not a sefirot project.", err=True)
         sys.exit(1)
 
     click.confirm("Remove sefirot from this project?", abort=True)
 
-    actions = deinit_project(root)
-    if actions:
-        click.echo("Sefirot removed:")
-        for action in actions:
-            click.echo(f"  - {action}")
-    else:
-        click.echo("Nothing to remove.")
+    import shutil
+    shutil.rmtree(sefirot_dir)
+
+    click.echo("Sefirot removed.")
+
+
+# --- Questions command (for debugging) ---
 
 
 @main.command()
-@click.option("--format", "fmt", type=click.Choice(["table", "markdown"]), default="table")
-@click.option("--filter", "status_filter", default=None, help="Filter by status")
-def status(fmt: str, status_filter: str | None) -> None:
-    """タスクの状態を表示する。"""
+def questions() -> None:
+    """Show and optionally clear pending questions."""
     root = _find_root()
-    state = SefirotState(root)
+    ms_file = root / "milestones.json"
 
-    if not state.is_initialized():
-        click.echo("Not a sefirot project. Run `sefirot init` first.", err=True)
+    if not ms_file.exists():
+        click.echo("No milestones.json found.", err=True)
         sys.exit(1)
 
-    tasks = state.list_tasks(status=status_filter)
+    data = json.loads(ms_file.read_text(encoding="utf-8"))
+    questions = data.get("questions", [])
 
-    if not tasks:
-        if fmt == "markdown":
-            click.echo("No active tasks yet.")
-        else:
-            click.echo("No tasks found.")
+    if not questions:
+        click.echo("No pending questions.")
         return
 
-    if fmt == "markdown":
-        click.echo("| ID | Title | Status | Type | Milestone |")
-        click.echo("|---|---|---|---|---|")
-        for t in tasks:
-            click.echo(f"| {t.id} | {t.title} | {t.status} | {t.type} | {t.milestone or '-'} |")
-    else:
-        # Table format
-        click.echo(f"{'ID':<10} {'Title':<40} {'Status':<12} {'Type':<10} {'Milestone':<10}")
-        click.echo("-" * 82)
-        for t in tasks:
-            click.echo(
-                f"{t.id:<10} {t.title[:40]:<40} {t.status:<12} {t.type:<10} {(t.milestone or '-'):<10}"
-            )
+    for i, q in enumerate(questions, 1):
+        click.echo(f"{i}. [{q.get('agent', '?')}/{q.get('task_id', '?')}] {q.get('question', '')}")
 
-
-@main.command()
-@click.argument("task_id")
-def resume(task_id: str) -> None:
-    """タスクのサブエージェントセッションを再開する。"""
-    root = _find_root()
-    state = SefirotState(root)
-
-    if not state.is_initialized():
-        click.echo("Not a sefirot project. Run `sefirot init` first.", err=True)
-        sys.exit(1)
-
-    task = state.get_task(task_id.upper())
-    if task is None:
-        click.echo(f"Task {task_id} not found.", err=True)
-        sys.exit(1)
-
-    if not task.session_id:
-        click.echo(f"Task {task.id} has no session ID.", err=True)
-        sys.exit(1)
-
-    # Change to worktree directory if available (sessions are saved per-cwd)
-    if task.worktree and Path(task.worktree).is_dir():
-        os.chdir(task.worktree)
-        click.echo(f"Resuming session for {task.id} in {task.worktree}")
-    else:
-        click.echo(f"Resuming session for {task.id}: {task.title}")
-
-    os.execvp("claude", ["claude", "--resume", task.session_id])
-
-
-@main.command()
-def serve() -> None:
-    """MCPサーバーを起動する（.mcp.json経由でClaude Codeから呼び出される）。"""
-    from sefirot.server import run_server
-
-    run_server()
-
-
-@main.group(name="mcp")
-def mcp_group() -> None:
-    """MCPサーバー管理コマンド。"""
-    pass
-
-
-def _find_mcp_pids() -> list[int]:
-    """Find PIDs of running sefirot serve processes."""
-    import subprocess as sp
-
-    result = sp.run(["pgrep", "-f", "sefirot serve"], capture_output=True, text=True)
-    return [
-        int(p) for p in result.stdout.strip().split("\n")
-        if p.strip() and int(p) != os.getpid()
-    ]
-
-
-def _kill_mcp(pids: list[int]) -> int:
-    """Kill the given PIDs. Returns number killed."""
-    import signal
-
-    killed = 0
-    for pid in pids:
-        try:
-            os.kill(pid, signal.SIGTERM)
-            click.echo(f"Killed sefirot serve (PID {pid})")
-            killed += 1
-        except ProcessLookupError:
-            pass
-    return killed
-
-
-@mcp_group.command()
-def stop() -> None:
-    """MCPサーバーを停止する。"""
-    pids = _find_mcp_pids()
-    if not pids:
-        click.echo("No running sefirot MCP server found.")
-        return
-    _kill_mcp(pids)
-
-
-@mcp_group.command()
-def restart() -> None:
-    """MCPサーバーを再起動する（停止後、Claude Codeで /mcp reconnect）。"""
-    pids = _find_mcp_pids()
-    if pids:
-        _kill_mcp(pids)
-    else:
-        click.echo("No running sefirot MCP server found.")
-    click.echo("Use `/mcp` in Claude Code to reconnect.")
-
-
-@main.group()
-def hook() -> None:
-    """フックハンドラー（Claude Codeフックから呼び出される）。"""
-    pass
-
-
-@hook.command("pre-compact")
-def hook_pre_compact() -> None:
-    """PreCompactフック処理 - コンテキスト圧迫を通知する。"""
-    root = _find_root()
-    queue_file = root / ".sefirot" / "queue.json"
-    import json
-    from datetime import datetime
-
-    data: list = []
-    if queue_file.exists():
-        data = json.loads(queue_file.read_text(encoding="utf-8"))
-
-    data.append({
-        "type": "context_pressure",
-        "message": "Context is getting large. Consider checkpointing and starting a fresh session.",
-        "timestamp": datetime.now().isoformat(),
-    })
-    queue_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-@hook.command("stop")
-def hook_stop() -> None:
-    """Stopフック処理 - エージェント応答完了。"""
-    # Currently a no-op, reserved for future use (e.g., auto-queue check)
-    pass
+    if click.confirm("\nClear all questions?"):
+        data["questions"] = []
+        ms_file.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        click.echo("Questions cleared.")
 
 
 if __name__ == "__main__":
