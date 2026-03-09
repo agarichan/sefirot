@@ -30,8 +30,9 @@ class WorktreeManager:
         return worktree_path
 
     def remove(self, task_id: str) -> None:
-        """Remove a worktree for a task."""
+        """Remove a worktree and its branch for a task."""
         worktree_path = self.worktrees_dir / task_id
+        branch_name = f"sefirot/{task_id}"
         if worktree_path.exists():
             subprocess.run(
                 ["git", "worktree", "remove", str(worktree_path), "--force"],
@@ -40,6 +41,13 @@ class WorktreeManager:
                 capture_output=True,
                 text=True,
             )
+        # Delete the branch after removing the worktree
+        subprocess.run(
+            ["git", "branch", "-D", branch_name],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
 
     def merge(self, task_id: str, target_branch: str = "main") -> str:
         """Merge a task's worktree branch into target. Returns merge output."""

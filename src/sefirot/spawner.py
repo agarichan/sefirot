@@ -55,8 +55,14 @@ class Spawner:
             milestone=milestone_id,
         )
 
-        # Create worktree
-        worktree_path = self.worktree.create(task.id)
+        try:
+            # Create worktree
+            worktree_path = self.worktree.create(task.id)
+        except Exception:
+            # Clean up task file on worktree creation failure
+            task_file = self.state.tasks_dir / f"{task.id}.md"
+            task_file.unlink(missing_ok=True)
+            raise
 
         # Generate session ID upfront so we can resume immediately
         session_id = str(uuid.uuid4())
