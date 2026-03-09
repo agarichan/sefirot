@@ -4,17 +4,17 @@
     "sefirot-loop": {
       "source": "agarichan/sefirot",
       "sourceType": "github",
-      "computedHash": "f98a068695b734923362b16622029504c3ac81289afc08655374c87f3791737c"
+      "computedHash": "1c1582ee678768a4fd3adeefafa8e827be3f0391a5817a473898616c7b61fe90"
     },
     "sefirot-milestone": {
       "source": "agarichan/sefirot",
       "sourceType": "github",
-      "computedHash": "090a084d87e6312e25766bb4958c2f665cebde8bc6ce809edbd6ab277268b6a1"
+      "computedHash": "d1d5b3ae8283ed23ba8fa7d4fd5d981b5f14094559c782acb2a6d3e28b7fb7cc"
     },
     "sefirot-plan": {
       "source": "agarichan/sefirot",
       "sourceType": "github",
-      "computedHash": "0b30ae8e6253344dcf043a04623ff6a30d08659ecaa1aad69ddead4e688e9c6b"
+      "computedHash": "a6e391abb1aaa09b54faea07da4c3f30c2d95c80a6578a7b0b1d4a3b73a27a95"
     }
   }
 }
