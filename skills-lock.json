@@ -1,20 +1,20 @@
 {
   "version": 1,
   "skills": {
-    "gen-milestones": {
+    "sefirot-loop": {
       "source": "agarichan/sefirot",
       "sourceType": "github",
-      "computedHash": "f919e5e5bb46ab17e6c0efbd5b6cfc8bf8942ac7833fd63574fe6bc693124c3d"
+      "computedHash": "f98a068695b734923362b16622029504c3ac81289afc08655374c87f3791737c"
     },
-    "loop": {
+    "sefirot-milestone": {
       "source": "agarichan/sefirot",
       "sourceType": "github",
-      "computedHash": "ea1879193f9735b21986820eb0b80ffe0f61ed4085fada6241aae3a4d31ab624"
+      "computedHash": "090a084d87e6312e25766bb4958c2f665cebde8bc6ce809edbd6ab277268b6a1"
     },
-    "plan": {
+    "sefirot-plan": {
       "source": "agarichan/sefirot",
       "sourceType": "github",
-      "computedHash": "606339fea6b23c0f5ef1ef99aabd31ea394367f6a53229a932331c98fefc9b55"
+      "computedHash": "0b30ae8e6253344dcf043a04623ff6a30d08659ecaa1aad69ddead4e688e9c6b"
     }
   }
 }
