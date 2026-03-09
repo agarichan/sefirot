@@ -68,7 +68,7 @@ def _ensure_daemon() -> None:
 
 
 @mcp.tool()
-def sefirot_spawn(type: str, task_description: str, milestone_id: str = "") -> str:
+async def sefirot_spawn(type: str, task_description: str, milestone_id: str = "") -> str:
     """Spawn a sub-agent in an isolated git worktree.
 
     Args:
@@ -78,7 +78,7 @@ def sefirot_spawn(type: str, task_description: str, milestone_id: str = "") -> s
     """
     _ensure_daemon()
     spawner = _get_spawner()
-    result = spawner.spawn(
+    result = await spawner.spawn(
         task_type=type,
         task_description=task_description,
         milestone_id=milestone_id or None,
@@ -87,13 +87,16 @@ def sefirot_spawn(type: str, task_description: str, milestone_id: str = "") -> s
 
 
 @mcp.tool()
-def sefirot_status(filter: str = "") -> str:
+async def sefirot_status(filter: str = "") -> str:
     """Get all task statuses.
 
     Args:
         filter: Optional status filter (pending, in_progress, blocked, completed, failed)
     """
     state = _get_state()
+    spawner = _get_spawner()
+    active = set(spawner.active_tasks())
+
     tasks = state.list_tasks(status=filter or None)
     result = [
         {
@@ -103,6 +106,7 @@ def sefirot_status(filter: str = "") -> str:
             "type": t.type,
             "milestone": t.milestone,
             "session_id": t.session_id,
+            "process_running": t.id in active,
         }
         for t in tasks
     ]
@@ -110,7 +114,7 @@ def sefirot_status(filter: str = "") -> str:
 
 
 @mcp.tool()
-def sefirot_queue() -> str:
+async def sefirot_queue() -> str:
     """Get the notification queue (blocked tasks, context reset suggestions, etc.)."""
     _ensure_daemon()
     root = _get_root()
@@ -126,7 +130,7 @@ def sefirot_queue() -> str:
 
 
 @mcp.tool()
-def sefirot_checkpoint(milestone_id: str, summary: str) -> str:
+async def sefirot_checkpoint(milestone_id: str, summary: str) -> str:
     """Record a milestone completion and save state snapshot.
 
     Args:
@@ -142,7 +146,7 @@ def sefirot_checkpoint(milestone_id: str, summary: str) -> str:
 
 
 @mcp.tool()
-def sefirot_decide(decision: str, context: str = "") -> str:
+async def sefirot_decide(decision: str, context: str = "") -> str:
     """Log a decision to decisions.md.
 
     Args:
@@ -155,7 +159,7 @@ def sefirot_decide(decision: str, context: str = "") -> str:
 
 
 @mcp.tool()
-def sefirot_merge(task_id: str) -> str:
+async def sefirot_merge(task_id: str) -> str:
     """Merge a completed task's worktree into the main branch.
 
     Args:

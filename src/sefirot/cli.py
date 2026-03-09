@@ -44,6 +44,27 @@ def init() -> None:
 
 
 @main.command()
+def deinit() -> None:
+    """現在のプロジェクトからsefirotを削除する。"""
+    from sefirot.installer import deinit_project
+
+    root = _find_root()
+    if not (root / ".sefirot").is_dir():
+        click.echo("Not a sefirot project.", err=True)
+        sys.exit(1)
+
+    click.confirm("Remove sefirot from this project?", abort=True)
+
+    actions = deinit_project(root)
+    if actions:
+        click.echo("Sefirot removed:")
+        for action in actions:
+            click.echo(f"  - {action}")
+    else:
+        click.echo("Nothing to remove.")
+
+
+@main.command()
 @click.option("--format", "fmt", type=click.Choice(["table", "markdown"]), default="table")
 @click.option("--filter", "status_filter", default=None, help="Filter by status")
 def status(fmt: str, status_filter: str | None) -> None:
@@ -99,7 +120,13 @@ def resume(task_id: str) -> None:
         click.echo(f"Task {task.id} has no session ID.", err=True)
         sys.exit(1)
 
-    click.echo(f"Resuming session for {task.id}: {task.title}")
+    # Change to worktree directory if available (sessions are saved per-cwd)
+    if task.worktree and Path(task.worktree).is_dir():
+        os.chdir(task.worktree)
+        click.echo(f"Resuming session for {task.id} in {task.worktree}")
+    else:
+        click.echo(f"Resuming session for {task.id}: {task.title}")
+
     os.execvp("claude", ["claude", "--resume", task.session_id])
 
 
@@ -109,6 +136,59 @@ def serve() -> None:
     from sefirot.server import run_server
 
     run_server()
+
+
+@main.group(name="mcp")
+def mcp_group() -> None:
+    """MCPサーバー管理コマンド。"""
+    pass
+
+
+def _find_mcp_pids() -> list[int]:
+    """Find PIDs of running sefirot serve processes."""
+    import subprocess as sp
+
+    result = sp.run(["pgrep", "-f", "sefirot serve"], capture_output=True, text=True)
+    return [
+        int(p) for p in result.stdout.strip().split("\n")
+        if p.strip() and int(p) != os.getpid()
+    ]
+
+
+def _kill_mcp(pids: list[int]) -> int:
+    """Kill the given PIDs. Returns number killed."""
+    import signal
+
+    killed = 0
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            click.echo(f"Killed sefirot serve (PID {pid})")
+            killed += 1
+        except ProcessLookupError:
+            pass
+    return killed
+
+
+@mcp_group.command()
+def stop() -> None:
+    """MCPサーバーを停止する。"""
+    pids = _find_mcp_pids()
+    if not pids:
+        click.echo("No running sefirot MCP server found.")
+        return
+    _kill_mcp(pids)
+
+
+@mcp_group.command()
+def restart() -> None:
+    """MCPサーバーを再起動する（停止後、Claude Codeで /mcp reconnect）。"""
+    pids = _find_mcp_pids()
+    if pids:
+        _kill_mcp(pids)
+    else:
+        click.echo("No running sefirot MCP server found.")
+    click.echo("Use `/mcp` in Claude Code to reconnect.")
 
 
 @main.group()

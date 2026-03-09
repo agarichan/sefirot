@@ -68,6 +68,96 @@ def init_project(root: Path) -> list[str]:
     return actions
 
 
+def deinit_project(root: Path) -> list[str]:
+    """Remove sefirot from a project directory.
+
+    Returns a list of actions taken.
+    """
+    actions: list[str] = []
+
+    # 1. Remove .sefirot/ directory
+    sefirot_dir = root / ".sefirot"
+    if sefirot_dir.is_dir():
+        shutil.rmtree(sefirot_dir)
+        actions.append("Removed .sefirot/")
+
+    # 2. Remove .claude/skills/sefirot/
+    skill_dir = root / ".claude" / "skills" / "sefirot"
+    if skill_dir.is_dir():
+        shutil.rmtree(skill_dir)
+        actions.append("Removed .claude/skills/sefirot/")
+        # Clean up empty parent dirs
+        _rmdir_if_empty(root / ".claude" / "skills")
+
+    # 3. Remove sefirot entry from .mcp.json
+    mcp_path = root / ".mcp.json"
+    if mcp_path.exists():
+        data = json.loads(mcp_path.read_text(encoding="utf-8"))
+        servers = data.get("mcpServers", {})
+        if "sefirot" in servers:
+            del servers["sefirot"]
+            if servers:
+                mcp_path.write_text(
+                    json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+                )
+            else:
+                mcp_path.unlink()
+            actions.append("Removed sefirot from .mcp.json")
+
+    # 4. Remove sefirot hooks from .claude/settings.json
+    settings_path = root / ".claude" / "settings.json"
+    if settings_path.exists():
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        hooks = data.get("hooks", {})
+        changed = False
+        for key in ["PreCompact", "Stop"]:
+            if key in hooks:
+                entries = hooks[key]
+                hooks[key] = [
+                    e for e in entries
+                    if not any(
+                        h.get("command", "").startswith("sefirot ")
+                        for h in e.get("hooks", [])
+                    )
+                ]
+                if not hooks[key]:
+                    del hooks[key]
+                changed = True
+        # Remove MCP tool permissions
+        permissions = data.get("permissions", {})
+        allow_list = permissions.get("allow", [])
+        sefirot_tools = [t for t in allow_list if t.startswith("mcp__sefirot__")]
+        if sefirot_tools:
+            permissions["allow"] = [t for t in allow_list if not t.startswith("mcp__sefirot__")]
+            if not permissions["allow"]:
+                del permissions["allow"]
+            if not permissions:
+                data.pop("permissions", None)
+            changed = True
+
+        if changed:
+            if not hooks:
+                data.pop("hooks", None)
+            if data:
+                settings_path.write_text(
+                    json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+                )
+            else:
+                settings_path.unlink()
+            actions.append("Removed sefirot from .claude/settings.json")
+
+    # Clean up .claude/ if empty
+    _rmdir_if_empty(root / ".claude")
+
+    return actions
+
+
+def _rmdir_if_empty(path: Path) -> None:
+    """Remove directory if it exists and is empty."""
+    if path.is_dir() and not any(path.iterdir()):
+        path.rmdir()
+
+
 def _copy_template(src: Path, dst: Path) -> None:
     """Copy template file if destination doesn't exist."""
     if not dst.exists():
@@ -99,6 +189,21 @@ def _update_claude_settings(root: Path) -> None:
     data: dict = {}
     if settings_path.exists():
         data = json.loads(settings_path.read_text(encoding="utf-8"))
+
+    # Add MCP tool permissions
+    permissions = data.setdefault("permissions", {})
+    allow_list: list = permissions.setdefault("allow", [])
+    mcp_tools = [
+        "mcp__sefirot__sefirot_spawn",
+        "mcp__sefirot__sefirot_status",
+        "mcp__sefirot__sefirot_queue",
+        "mcp__sefirot__sefirot_checkpoint",
+        "mcp__sefirot__sefirot_decide",
+        "mcp__sefirot__sefirot_merge",
+    ]
+    for tool in mcp_tools:
+        if tool not in allow_list:
+            allow_list.append(tool)
 
     hooks = data.setdefault("hooks", {})
 
