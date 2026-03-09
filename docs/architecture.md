@@ -2,169 +2,173 @@
 
 ## 概要
 
-SefirotはClaude Codeの上に構築された薄いオーケストレーションレイヤーで、マルチエージェント開発ワークフローを半自動化します。基本哲学は**人間が判断し、AIが実装する**こと。完全な自律ではなく、人間を意思決定者として維持しつつ、エージェントの起動・コンテキストの受け渡し・タスク状態の追跡にかかる手間を削減します。
+Sefirot は Claude Code の上に構築されたマルチエージェントオーケストレーションフレームワーク。Planner / Builder / Verifier の3エージェントが Milestone 単位で設計→実装→検証のループを自動で回す。人間は設計の承認とエージェントからの質問への回答だけを行う。
 
-Sefirotは汎用フレームワーク（プロジェクト固有ではない）で、CLI・MCPサーバー・バックグラウンドデーモンの3つで構成されます。すべての状態は`.sefirot/`配下のMarkdownファイルに保存されるため、確認・バージョン管理・セッション間の復旧が可能です。
+構成要素は CLI（Python）と Claude Code スキルの2つ。外部サーバーやデーモンは不要。すべての状態は `milestones.json` と設計ドキュメント（Markdown）で管理される。
 
 ## アーキテクチャ図
 
 ```
-┌──────────────────────────────────────────────────────┐
-│            Claude Code（メインエージェント）            │
-│                                                      │
-│  /sefirot スキルでPMロールを読み込み                     │
-│  - マイルストーンとタスクを計画                          │
-│  - sefirot MCPツールでサブエージェントを起動              │
-│  - ユーザーと対話（Claude Code標準のUX）                 │
-│  - スラッシュコマンド、画像、フックにフルアクセス           │
-└──────────┬──────────────────────────┬────────────────┘
-           │ MCPツール呼び出し         │ フック（HTTP）
-           ▼                          ▼
-┌──────────────────────────────────────────────────────┐
-│         sefirot（MCPサーバー + デーモン）               │
-│                                                      │
-│  MCPツール:                                          │
-│    sefirot_spawn    - worktree作成＋サブエージェント開始 │
-│    sefirot_status   - 全タスク状態の一覧                │
-│    sefirot_queue    - 通知キューの取得                  │
-│    sefirot_checkpoint - マイルストーンの記録             │
-│    sefirot_decide   - 意思決定の記録                    │
-│    sefirot_merge    - worktreeのマージ                 │
-│                                                      │
-│  デーモン:                                            │
-│    - .sefirot/tasks/ のファイル変更を監視               │
-│    - ブロック状態のサブエージェントを検出→通知をキューに追加│
-│    - PreCompactフックを受信→リセット推奨フラグを設定     │
-└──────────┬───────────────────────────────────────────┘
-           │ claude -p（非対話モード）
-           ▼
-┌──────────────────────────────────────────────────────┐
-│        サブエージェント（Claude Codeセッション）         │
-│  - 各エージェントは独自のgit worktreeで作業              │
-│  - .sefirot/tasks/TASK-xxx.md にステータスを書き込み     │
-│  - ブロック時は質問を記録して停止                        │
-│  - ユーザーが直接再開可能: claude --resume <id>          │
-└──────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│          Claude Code（ユーザーセッション）             │
+│                                                    │
+│  /plan      設計ドキュメント作成（対話形式）           │
+│  /milestone  milestones.json 生成                   │
+│  /loop      sefirot loop --from-skill を実行         │
+│             質問があればユーザーに確認して再開          │
+└──────────────────────┬─────────────────────────────┘
+                       │ subprocess
+                       ▼
+┌────────────────────────────────────────────────────┐
+│          sefirot loop（LoopEngine）                  │
+│                                                    │
+│  ┌─ Planner ──────────────────────────────┐        │
+│  │  claude -p で起動（main repo）           │        │
+│  │  → 設計ドキュメント + tasks 生成          │        │
+│  └────────────────────────────────────────┘        │
+│           ↓                                        │
+│  ┌─ Builder × N ─────────────────────────┐        │
+│  │  claude -p -w sefirot-{task_id} で起動  │        │
+│  │  → 各 worktree で並列実装（最大8）       │        │
+│  │  → タスクごとにコミット                   │        │
+│  └────────────────────────────────────────┘        │
+│           ↓                                        │
+│  ┌─ Verifier ────────────────────────────┐        │
+│  │  claude -p で起動（main repo）           │        │
+│  │  → ブランチを順次マージ                   │        │
+│  │  → テスト・リント・型チェック             │        │
+│  │  → 失敗時は fix task 生成               │        │
+│  │  → worktree/ブランチのクリーンアップ      │        │
+│  └────────────────────────────────────────┘        │
+└────────────────────────────────────────────────────┘
 ```
 
 ## コンポーネント
 
 ### CLI (`cli.py`)
 
-pyproject.tomlで`sefirot`として登録されたエントリーポイント。
+`pyproject.toml` で `sefirot` として登録されたエントリーポイント。
 
-| コマンド              | 目的                                              |
-|----------------------|--------------------------------------------------|
-| `sefirot init`       | プロジェクトにsefirotを導入（後述）                   |
-| `sefirot status`     | 全タスクの状態を表示（ファイル読み取りのみ、AI不要）     |
-| `sefirot resume <id>`| session_idを検索して`claude --resume`を実行          |
-| `sefirot serve`      | MCPサーバーを起動（Claude Codeから呼び出される）       |
+| コマンド | 目的 |
+|---|---|
+| `sefirot loop` | Planner → Builder → Verifier ループを実行 |
+| `sefirot status` | milestones.json の状態を表示 |
+| `sefirot questions` | 保留中の質問を表示・クリア |
 
-`sefirot init`が生成・変更するもの:
-- `.sefirot/` デフォルト設定付きのディレクトリ構造
-- `.mcp.json` -- sefirot MCPサーバーの登録
-- `.claude/settings.json` -- PreCompactとStopフックの追加
-- `.claude/skills/sefirot/SKILL.md` -- `/sefirot`スキルファイル
-- `CLAUDE.md`は**変更しない**
+### LoopEngine (`loop.py`)
 
-### MCPサーバー (`server.py`)
+オーケストレーションのコア。Milestone ごとに以下を実行する:
 
-stdio transportを使用するPython MCP SDKサーバー。メインエージェントがClaude Code内から呼び出す6つのツールを提供。また、Claude Codeからのフックイベント（PreCompact、Stop）を受信するHTTPエンドポイントも公開。
+1. **Planner フェーズ** — タスクが未生成なら Planner を起動。設計ドキュメント（`docs/tasks/` 配下）とタスク一覧を生成し、`milestones.json` に書き込む。
+2. **Wave ループ** — 未完了タスクを Wave 番号順に処理:
+   - **Builder フェーズ**: 同一 Wave のタスクを asyncio で並列実行。各 Builder は `claude -p -w sefirot-{task_id}` で worktree 内で動作する。
+   - **Verifier フェーズ**: Builder 完了後、Verifier がブランチをマージし検証する。失敗時は fix task を追加。
+3. **完了判定** — 全タスク完了で Milestone を done にマーク。
 
-### デーモン (`daemon.py`)
+### スキル
 
-watchdogを使って`.sefirot/tasks/`のファイル変更を監視。サブエージェントがタスクファイルに`status: blocked`を書き込むと、デーモンが通知キューにエントリを追加。メインエージェントは`sefirot_queue()`で取得。
+`npx skills add agarichan/sefirot` でインストールされる3つのスキル:
 
-### 状態管理 (`state.py`)
+| スキル | 説明 |
+|---|---|
+| `/plan` | 対話形式で設計ドキュメントを作成 → `docs/tasks/` に出力 |
+| `/milestone` | 設計ドキュメントから `milestones.json` を生成 |
+| `/loop` | `sefirot loop --from-skill` を実行し、質問があればユーザーに確認 |
 
-すべての状態は`.sefirot/`配下にYAMLフロントマター付きMarkdownとして保存:
+### プロンプトテンプレート
 
-```
-.sefirot/
-├── config/
-│   ├── main-agent.md          # PMロール定義（カスタマイズ可能）
-│   └── agents/
-│       ├── implement.md       # 実装サブエージェント用プロンプト
-│       ├── test.md            # テストサブエージェント用プロンプト
-│       ├── review.md          # レビューサブエージェント用プロンプト
-│       └── spec.md            # 仕様サブエージェント用プロンプト
-├── project.md                 # プロジェクト概要
-├── milestones.md              # マイルストーン一覧
-├── decisions.md               # 意思決定ログ
-├── tasks/                     # タスクごとに1ファイル（TASK-xxx.md）
-├── specs/                     # 仕様書
-└── sessions.json              # セッションIDマッピング
-```
+3つのエージェント用テンプレート。変数置換（`__TASK_ID__` 等）でプロンプトを組み立てる。
 
-タスクファイルのフロントマタースキーマ:
+| テンプレート | エージェント | 主な内容 |
+|---|---|---|
+| `planner.md` | Planner | 設計ドキュメント作成、タスク分割 |
+| `builder.md` | Builder | 1タスクの実装、セルフチェック、コミット |
+| `verifier.md` | Verifier | マージ、検証、fix task 生成 |
 
-```yaml
-id: TASK-001
-status: pending | in_progress | blocked | completed | failed
-type: implement | spec | test | review
-session_id: <claude-session-id>
-worktree: .sefirot/worktrees/TASK-001
-milestone: M-001
-```
+探索順: `.sefirot/prompts/` → `.claude/skills/sefirot-loop/prompts/` → パッケージ内蔵
 
-サブエージェントがブロックされると、質問セクションを追記。ユーザーがセッションを再開して直接回答するか、メインエージェントが判断を中継する。
+## Wave システム
+
+Builder は Wave 単位で並列実行される。同一 Wave 内のタスクはファイル競合しない前提。
+
+- **W1**: 型定義・インターフェース（契約のみ）
+- **W2-W4**: 並列実装（同一ファイル編集は別 Wave）
+- **W5**: テスト・統合
+
+Verifier は Wave 完了後に検証レベルを調整する:
+- W1 のみ: 検証スキップ（契約のみ）
+- 中間 Wave: 基本チェック（lint、型、ユニットテスト）
+- Milestone 最終 Wave: フルチェック（E2E 含む）
 
 ## 通信フロー
 
-エージェント同士が直接通信することはない。すべての通信は`.sefirot/`ファイルを介して行われる:
+エージェント同士が直接通信することはない。すべての通信は `milestones.json` と設計ドキュメントを介して行われる:
 
-1. **メインエージェント → サブエージェント**: `sefirot_spawn()`がタスクファイルを作成し、`.sefirot/config/agents/*.md`を参照する指示で`claude -p`を起動。
-2. **サブエージェント → メインエージェント**: サブエージェントがタスクファイルにステータス更新を書き込む。デーモンが変更を検知し、通知キューに追加。
-3. **メインエージェントのポーリング**: メインエージェントが`sefirot_queue()`を呼び出し、ブロックされたタスク・完了した作業・コンテキストリセットの提案を確認。
-4. **ユーザーの介入**: ユーザーが別のターミナルで`claude --resume <session-id>`を実行し、ブロックされたサブエージェントと直接対話可能。
+1. **LoopEngine → エージェント**: プロンプトを stdin で送信。設計ドキュメントのパスや milestones.json の絶対パスを含む。
+2. **Builder → Verifier**: コミットメッセージの「申し送り」セクションとセッションログ（stream-json）の result イベントで情報を受け渡す。
+3. **エージェント → ユーザー**: `milestones.json` の `questions` 配列に質問を書き込む。LoopEngine が検知して exit code 10 で停止し、スキルがユーザーに質問を提示する。
 
-## スキルベースの起動
+## 質問キュー
 
-Sefirotは`CLAUDE.md`を変更しない。代わりに`.claude/skills/sefirot/SKILL.md`にスキルファイルをインストール:
+`--from-skill` モードで有効。Builder/Verifier が判断に迷った場合の流れ:
 
-```markdown
----
-name: sefirot
-description: Activate sefirot orchestration system.
----
+1. エージェントが `milestones.json` の `questions` 配列に質問を追加
+2. LoopEngine が検知し exit code 10 で停止
+3. `/loop` スキルが質問をユーザーに提示
+4. 回答を設計ドキュメントの該当タスクセクションに「追加指示」として追記
+5. `questions` をクリアしてコミット
+6. ループ再開
 
-!`cat .sefirot/config/main-agent.md`
+## Git Worktree 戦略
 
-## Current Project State
-!`sefirot status --format=markdown 2>/dev/null || echo "No active tasks yet."`
+各 Builder は競合を避けるため、独立した worktree で作業する:
+
+1. `claude -p -w sefirot-{task_id}` が worktree を自動作成
+2. Builder が worktree 内で実装・コミット
+3. Verifier が `main` にマージし、worktree とブランチを削除
+
+## ディレクトリ構造
+
 ```
-
-ユーザーが`/sefirot`と入力すると、Claude Codeがこのスキルを読み込み:
-- `.sefirot/config/main-agent.md`からPMロールを動的に読み取り
-- `sefirot status`で現在のタスク状態を注入
-- プロジェクトごとに`config/main-agent.md`を独自にカスタマイズ可能
-
-## コンテキスト管理
-
-長いセッションではコンテキストが蓄積される。SefirotはPreCompactフックでこれに対応:
-
-1. コンテキスト圧迫が高まるとClaude Codeが`PreCompact`を発火。
-2. フックがsefirotのHTTPエンドポイントにアクセスし、リセット推奨フラグを設定。
-3. 次の`sefirot_queue()`呼び出し時にメインエージェントがフラグを受信。
-4. メインエージェントが現在の状態を`.sefirot/`に保存し、新しいセッションの開始を提案。
-5. 新セッションが`.sefirot/`ファイルと`sefirot_status()`から状態を復元。
-
-`Stop`フックはセッション終了イベントをキャプチャし、sefirotが`sessions.json`のセッション追跡を更新できるようにする。
-
-## Git Worktree戦略
-
-各サブエージェントは競合を避けるため、独立したgit worktreeで作業:
-
-1. `sefirot_spawn()`が`git worktree add`を呼び出し、タスク用のworktreeを作成（`worktree.py`が管理）。
-2. サブエージェント（`claude -p`）がそのworktree内で実行。
-3. タスク完了時、`sefirot_merge()`がworktreeブランチをメインブランチにマージ。
-4. マージ後にworktreeをクリーンアップ。
-
-これにより、複数のサブエージェントが異なるタスクを並列で作業しても、互いの変更を上書きしない。
+project/
+├── milestones.json                              # タスク状態（/milestone で生成）
+├── docs/tasks/
+│   ├── 20260310_1430_OAuth2認証設計.md           # 設計ドキュメント（/plan で生成）
+│   ├── 20260310_1435_milestone-1.md             # Planner が生成
+│   └── 20260310_1440_milestone-2.md
+├── .sefirot/
+│   ├── sessions/                                # セッションログ（自動作成）
+│   │   ├── planner-m1.log                       # stream-json 形式
+│   │   ├── builder-{task_id}.log
+│   │   ├── verifier-m1-w1.log
+│   │   └── {YYYYMMDD_HHMM}_{作業内容}.md        # Builder の作業記録
+│   └── prompts/                                 # カスタムプロンプト（任意）
+├── .claude/skills/
+│   ├── sefirot-plan/SKILL.md
+│   ├── sefirot-milestone/SKILL.md
+│   └── sefirot-loop/
+│       ├── SKILL.md
+│       └── prompts/                             # スキル同梱プロンプト
+└── src/sefirot/                                 # パッケージソース
+    ├── cli.py                                   # CLI エントリーポイント
+    ├── loop.py                                  # LoopEngine
+    └── templates/prompts/                       # デフォルトプロンプト
+```
 
 ## 実装
 
-- **言語**: Python
-- **依存関係**: `mcp`（MCP SDK）、`watchdog`（ファイル監視）、`pyyaml`（フロントマター解析）、`click`（CLI）
+- **言語**: Python 3.11+
+- **依存関係**: `click`（CLI のみ）
 - **パッケージエントリ**: `[project.scripts] sefirot = "sefirot.cli:main"`
-- **ソースレイアウト**: `src/sefirot/` 配下にcli、server、daemon、state、worktree、spawner、installer、templatesの各モジュール
+- **ソースレイアウト**: `src/sefirot/` 配下に `cli.py`、`loop.py`、`templates/`
+- **外部依存**: Claude Code CLI（`claude` コマンド）
+
+## 定数
+
+| 定数 | 値 | 説明 |
+|---|---|---|
+| `EXIT_QUESTIONS_PENDING` | 10 | 質問保留時の終了コード |
+| `DEFAULT_MAX_PARALLEL` | 8 | Builder の最大並列数 |
+| `DEFAULT_MAX_ROUNDS` | 50 | 1回の実行あたりの最大ラウンド数 |
+| `DEFAULT_SESSION_TIMEOUT` | 1800 | エージェントセッションのタイムアウト（秒） |
+| `DEFAULT_MODEL` | opus | 使用する Claude モデル |

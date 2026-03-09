@@ -582,27 +582,3 @@ class LoopEngine:
                 continue
         return "\n\n".join(notes) if notes else "(No handoff notes available)"
 
-    # --- Worktree Cleanup ---
-
-    def cleanup_worktrees(self, task_ids: list[str]) -> None:
-        """Remove worktrees and branches for completed tasks."""
-        for task_id in task_ids:
-            branch = f"sefirot-{task_id}"
-            # Remove worktree
-            subprocess.run(
-                ["git", "worktree", "remove", branch, "--force"],
-                cwd=self.root,
-                capture_output=True,
-            )
-            # Prune worktree list
-            subprocess.run(
-                ["git", "worktree", "prune"],
-                cwd=self.root,
-                capture_output=True,
-            )
-            # Delete branch
-            subprocess.run(
-                ["git", "branch", "-D", branch],
-                cwd=self.root,
-                capture_output=True,
-            )

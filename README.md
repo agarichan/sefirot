@@ -41,18 +41,6 @@ npx skills add agarichan/sefirot
 uv tool install git+https://github.com/agarichan/sefirot.git
 ```
 
-### セットアップ
-
-```bash
-cd your-project
-sefirot init
-```
-
-これにより以下が作成される:
-
-- `.sefirot/` - 設定・セッションログ格納ディレクトリ
-- `.sefirot/prompts/` - エージェントプロンプト（カスタマイズ可能）
-
 ## 使い方
 
 ### 1. 設計ドキュメントを作成する
@@ -153,8 +141,6 @@ sefirot status
 
 | コマンド | 説明 |
 |---|---|
-| `sefirot init` | プロジェクトに sefirot を初期化 |
-| `sefirot deinit` | sefirot を削除 |
 | `sefirot loop` | Planner → Builder → Verifier ループを実行 |
 | `sefirot status` | milestones.json の状態を表示 |
 | `sefirot questions` | 保留中の質問を表示・クリア |
@@ -171,7 +157,7 @@ sefirot status
 
 ## プロンプトのカスタマイズ
 
-`sefirot init` で `.sefirot/prompts/` にコピーされたプロンプトを編集できる。
+`.sefirot/prompts/` にプロンプトファイルを配置するとカスタマイズできる。
 パッケージのデフォルトよりローカルコピーが優先される。
 
 - `planner.md` - 設計・タスク分割の方針

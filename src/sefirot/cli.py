@@ -11,10 +11,10 @@ import click
 
 
 def _find_root() -> Path:
-    """Find project root (directory containing .sefirot/ or .git/)."""
+    """Find project root (directory containing .git/)."""
     cwd = Path.cwd()
     for parent in [cwd, *cwd.parents]:
-        if (parent / ".sefirot").is_dir() or (parent / ".git").is_dir():
+        if (parent / ".git").is_dir():
             return parent
     return cwd
 
@@ -96,59 +96,6 @@ def status() -> None:
         click.echo(f"\nPending questions: {len(questions)}")
         for q in questions:
             click.echo(f"  - [{q.get('agent', '?')}] {q.get('question', '')[:60]}")
-
-
-# --- Init/Deinit ---
-
-
-@main.command()
-def init() -> None:
-    """Initialize sefirot in the current project."""
-    root = Path.cwd()
-    sefirot_dir = root / ".sefirot"
-
-    if sefirot_dir.exists():
-        click.echo("Already initialized.", err=True)
-        sys.exit(1)
-
-    # Create directory structure
-    (sefirot_dir / "sessions").mkdir(parents=True)
-    (sefirot_dir / "prompts").mkdir(parents=True)
-
-    # Copy default prompts from package templates
-    templates_dir = Path(__file__).parent / "templates" / "prompts"
-    if templates_dir.is_dir():
-        import shutil
-        for f in templates_dir.glob("*.md"):
-            shutil.copy2(f, sefirot_dir / "prompts" / f.name)
-
-    click.echo("Sefirot initialized:")
-    click.echo(f"  - Created {sefirot_dir}")
-    click.echo(f"  - Copied prompt templates to {sefirot_dir / 'prompts'}")
-    click.echo()
-    click.echo("Next steps:")
-    click.echo("  1. Install skills: npx skills add agarichan/sefirot")
-    click.echo("  2. /plan <description> - Create a design document")
-    click.echo("  3. /gen-milestones <doc> - Generate milestones.json")
-    click.echo("  4. sefirot loop - Run the build loop")
-
-
-@main.command()
-def deinit() -> None:
-    """Remove sefirot from the current project."""
-    root = _find_root()
-    sefirot_dir = root / ".sefirot"
-
-    if not sefirot_dir.is_dir():
-        click.echo("Not a sefirot project.", err=True)
-        sys.exit(1)
-
-    click.confirm("Remove sefirot from this project?", abort=True)
-
-    import shutil
-    shutil.rmtree(sefirot_dir)
-
-    click.echo("Sefirot removed.")
 
 
 # --- Questions command (for debugging) ---

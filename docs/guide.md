@@ -4,91 +4,122 @@
 
 ### 1. インストール
 
-```bash
-uv tool install sefirot
-```
-
-### 2. プロジェクトで初期化
+スキル（`/plan`, `/milestone`, `/loop`）:
 
 ```bash
-cd your-project
-sefirot init
+npx skills add agarichan/sefirot
 ```
 
-これにより以下が作成される:
-- `.sefirot/` - デフォルト設定付きの状態ディレクトリ
-- `.claude/skills/sefirot/SKILL.md` - Claude Codeスキル
-- `.mcp.json` - MCPサーバー登録
-- `.claude/settings.json` - コンテキスト監視用フック
+CLI（`sefirot loop` コマンド）:
 
-### 3. 作業開始
+```bash
+uv tool install git+https://github.com/agarichan/sefirot.git
+```
+
+### 2. 作業開始
 
 ```bash
 claude
 ```
 
-Claude Code内で`/sefirot`と入力してPMモードを起動。
+## ワークフロー
 
-## ワークフロー例
+### Step 1: 設計ドキュメント作成
 
-### 計画
+Claude Code 内で `/plan` を実行:
 
 ```
-あなた: /sefirot
-あなた: ユーザーモジュールにOAuth2認証を追加したい。
-
-PMエージェント: マイルストーンとタスクに分解します...
-  M-001: OAuth2認証
-    TASK-001: 認証フローの設計（spec）
-    TASK-002: OAuth2プロバイダーの実装（implement）
-    TASK-003: 認証テストの作成（test）
-    TASK-004: セキュリティレビュー（review）
+/plan ユーザーモジュールにOAuth2認証を追加したい
 ```
 
-### 実行
+対話形式で要件を詰め、`docs/tasks/` に設計ドキュメントが作成される。
 
-PMエージェントが`sefirot_spawn`でサブエージェントを起動:
-- 各サブエージェントは独自のgit worktreeを取得
-- それぞれバックグラウンドで独立して作業
+### Step 2: Milestone 生成
 
-### ブロックされたタスクの処理
+```
+/milestone docs/tasks/20260310_1430_OAuth2認証設計.md
+```
 
-サブエージェントが質問を持つ場合:
-1. タスクファイルに質問を書き込み、ステータスを`blocked`に設定
-2. sefirotデーモンがこれを検知し、通知をキューに追加
-3. PMエージェントが`sefirot_queue()`で通知を取得
-4. PMがあなたに伝える: 「TASK-002がブロックされています。再開: `sefirot resume TASK-002`」
-5. 別のターミナルで: `sefirot resume TASK-002`
-6. 質問に直接回答すると、サブエージェントが作業を継続
+設計ドキュメントから `milestones.json` が生成される。各 Milestone は検証可能な単位に分割され、tasks は空の状態で作成される（Planner が後で埋める）。
 
-### 状態の確認
+### Step 3: ループ実行
 
-シェルから（AI不要）:
+#### Claude Code 内から（推奨）
+
+```
+/loop
+```
+
+質問が発生すると自動的にユーザーに確認し、回答を設計書に反映して再開する。
+
+#### CLI から直接
+
+```bash
+sefirot loop              # 全 Milestone を実行
+sefirot loop -m 1         # 特定の Milestone のみ
+sefirot loop --dry-run    # 実行計画の確認のみ
+```
+
+### Step 4: 状態確認
 
 ```bash
 sefirot status
 ```
 
-またはClaude Code内でPMエージェントが`sefirot_status()`を呼び出す。
+```
+[    ] Milestone 1: メールアドレスでサインアップ・ログインができる  (3/5 tasks)
+  [x] W1 define-auth-types: 認証関連の型定義
+  [x] W2 impl-auth-service: 認証サービス実装
+  [x] W2 impl-auth-api: 認証APIエンドポイント実装
+  [ ] W3 impl-auth-ui: ログイン/サインアップUI
+  [ ] W4 integration-test: 統合テスト
+```
 
-### 完了した作業のマージ
+## ループの流れ
 
-タスクが完了すると、PMエージェントが`sefirot_merge(task_id)`を呼び出し、worktreeブランチをmainにマージ。
+```
+/loop
+ ├─ Milestone ごとに:
+ │   ├─ Planner: タスク分割 + 詳細設計書作成
+ │   ├─ Wave ごとに:
+ │   │   ├─ Builder × N: worktree 並列実装（最大8並列）
+ │   │   ├─ Verifier: マージ + 品質検証
+ │   │   └─ (失敗時は fix task を追加して再ループ)
+ │   └─ Milestone 完了
+ └─ 全 Milestone 完了
+```
+
+### 質問が発生した場合
+
+Builder/Verifier が判断に迷うと `milestones.json` に質問を書き込み、ループが停止する（exit code 10）。
+
+`/loop` 経由の場合、スキルがユーザーに質問を提示し、回答を設計ドキュメントに反映してループを再開する:
+
+```
+[質問 1/1] from builder (task: impl-auth-service)
+パスワードのハッシュ化に bcrypt と argon2 のどちらを使うべきですか？
+```
+
+回答は設計ドキュメントの該当タスクセクションに「追加指示」として永続化される。
 
 ## カスタマイズ
 
-### PMロール
+### プロンプト
 
-`.sefirot/config/main-agent.md`を編集して、PMエージェントの振る舞いをカスタマイズ。
+`.sefirot/prompts/` にプロンプトファイルを配置するとカスタマイズできる。パッケージデフォルトよりローカルコピーが優先される。
 
-### サブエージェントプロンプト
+- `planner.md` - 設計・タスク分割の方針
+- `builder.md` - 実装の進め方・コミット規約
+- `verifier.md` - マージ・検証・修正の判断基準
 
-`.sefirot/config/agents/`内のファイルを編集:
-- `implement.md` - 実装エージェント
-- `test.md` - テストエージェント
-- `review.md` - レビューエージェント
-- `spec.md` - 仕様エージェント
+プロンプトの探索順:
 
-### コンテキスト管理
+1. `.sefirot/prompts/` （プロジェクトローカル）
+2. `.claude/skills/sefirot-loop/prompts/` （skills でインストールされたもの）
+3. パッケージ内蔵テンプレート（フォールバック）
 
-セッションが大きくなると、sefirotがPreCompactフックでコンテキスト圧迫を検知し、新しいセッションの開始を提案する。状態は`.sefirot/`ファイルに保存されているため、新しいセッションで`/sefirot`を呼び出せばそこから再開できる。
+## 前提条件
+
+- Python 3.11+
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) がインストール済み
+- Git リポジトリ内で実行すること
