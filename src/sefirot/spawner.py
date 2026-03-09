@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from sefirot.state import SefirotState
@@ -14,11 +15,14 @@ from sefirot.worktree import WorktreeManager
 
 logger = logging.getLogger(__name__)
 
+# Max number of progress entries to keep per task
+MAX_PROGRESS_ENTRIES = 20
+
 
 class Spawner:
     """Spawns sub-agent Claude Code sessions in isolated worktrees.
 
-    Manages running processes internally and monitors them via an async loop.
+    Manages running processes internally and streams progress via NDJSON.
     """
 
     def __init__(self, root: Path) -> None:
@@ -27,6 +31,10 @@ class Spawner:
         self.worktree = WorktreeManager(root)
         # task_id -> asyncio.subprocess.Process
         self._processes: dict[str, asyncio.subprocess.Process] = {}
+        # task_id -> list of progress entries
+        self._progress: dict[str, list[str]] = {}
+        # task_id -> stream reader task
+        self._readers: dict[str, asyncio.Task] = {}
         self._monitor_task: asyncio.Task | None = None
 
     async def spawn(
@@ -38,7 +46,7 @@ class Spawner:
         """Spawn a sub-agent for a new task.
 
         Returns immediately with task_id and worktree_path.
-        The sub-agent runs in the background.
+        The sub-agent runs in the background with streamed progress.
         """
         # Create task
         task = self.state.create_task(
@@ -56,13 +64,12 @@ class Spawner:
         # Build prompt from agent config + task info
         prompt = self._build_prompt(task_type, task)
 
-        # Launch claude asynchronously with pre-assigned session ID
-        # Remove CLAUDECODE env var to allow nested sessions
-        # Pass prompt via stdin to avoid argument length issues
+        # Launch claude with stream-json for real-time progress
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         process = await asyncio.create_subprocess_exec(
             "claude", "-p",
-            "--output-format", "json",
+            "--output-format", "stream-json",
+            "--verbose",
             "--session-id", session_id,
             "--allowedTools", self._tools_for_type(task_type),
             "--permission-mode", self._permission_for_type(task_type),
@@ -79,6 +86,12 @@ class Spawner:
         await process.stdin.wait_closed()
 
         self._processes[task.id] = process
+        self._progress[task.id] = []
+
+        # Start stream reader for this task
+        self._readers[task.id] = asyncio.create_task(
+            self._read_stream(task.id, process)
+        )
 
         # Update task status immediately with session_id
         self.state.update_task(
@@ -97,6 +110,77 @@ class Spawner:
             "worktree_path": str(worktree_path),
             "status": "spawned",
         }
+
+    async def _read_stream(self, task_id: str, process: asyncio.subprocess.Process) -> None:
+        """Read NDJSON stream from sub-agent and extract progress."""
+        try:
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                try:
+                    event = json.loads(line.decode())
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+
+                entry = self._extract_progress(event)
+                if entry:
+                    progress = self._progress.get(task_id, [])
+                    progress.append(entry)
+                    # Keep only recent entries
+                    if len(progress) > MAX_PROGRESS_ENTRIES:
+                        progress = progress[-MAX_PROGRESS_ENTRIES:]
+                    self._progress[task_id] = progress
+        except Exception as e:
+            logger.debug("Stream reader for %s ended: %s", task_id, e)
+
+    def _extract_progress(self, event: dict) -> str | None:
+        """Extract a human-readable progress line from a stream event."""
+        etype = event.get("type")
+
+        if etype == "assistant":
+            message = event.get("message", {})
+            content = message.get("content", [])
+            for block in content:
+                if block.get("type") == "tool_use":
+                    tool = block.get("name", "?")
+                    inp = block.get("input", {})
+                    return self._summarize_tool_use(tool, inp)
+                if block.get("type") == "text":
+                    text = block.get("text", "").strip()
+                    if text:
+                        # Truncate long text
+                        if len(text) > 100:
+                            text = text[:100] + "…"
+                        return f"💬 {text}"
+            return None
+
+        if etype == "result":
+            cost = event.get("total_cost_usd", 0)
+            turns = event.get("num_turns", 0)
+            duration = event.get("duration_ms", 0)
+            return f"✅ 完了 (turns={turns}, {duration/1000:.1f}s, ${cost:.4f})"
+
+        return None
+
+    def _summarize_tool_use(self, tool: str, inp: dict) -> str:
+        """Create a short summary of a tool use."""
+        if tool in ("Read", "Glob", "Grep"):
+            target = inp.get("file_path") or inp.get("pattern") or inp.get("path", "")
+            return f"🔍 {tool}: {target}"
+        if tool in ("Edit", "Write"):
+            path = inp.get("file_path", "")
+            return f"✏️ {tool}: {path}"
+        if tool == "Bash":
+            cmd = inp.get("command", "")
+            if len(cmd) > 80:
+                cmd = cmd[:80] + "…"
+            return f"⚡ Bash: {cmd}"
+        return f"🔧 {tool}"
+
+    def get_progress(self, task_id: str) -> list[str]:
+        """Get progress entries for a task."""
+        return list(self._progress.get(task_id, []))
 
     def _ensure_monitor(self) -> None:
         """Start the monitor loop if not already running."""
@@ -129,16 +213,23 @@ class Spawner:
         if process is None:
             return
 
-        # Drain stdout/stderr
+        # Wait for stream reader to finish
+        reader = self._readers.pop(task_id, None)
+        if reader and not reader.done():
+            try:
+                await asyncio.wait_for(reader, timeout=5.0)
+            except (asyncio.TimeoutError, Exception):
+                reader.cancel()
+
+        # Drain stderr
         try:
-            await process.communicate()
+            await process.stderr.read()
         except Exception:
             pass
 
         # Determine final status from task file (sub-agent may have updated it)
         task = self.state.get_task(task_id)
         if task and task.status == "in_progress":
-            # Sub-agent didn't update status itself; mark based on return code
             new_status = "completed" if process.returncode == 0 else "failed"
             self.state.update_task(task_id, status=new_status)
 
@@ -155,8 +246,6 @@ class Spawner:
                 notifications = json.loads(queue_file.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 notifications = []
-
-        from datetime import datetime
 
         ntype = "task_completed" if returncode == 0 else "task_failed"
         notifications.append({

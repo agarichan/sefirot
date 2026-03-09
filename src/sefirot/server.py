@@ -98,8 +98,9 @@ async def sefirot_status(filter: str = "") -> str:
     active = set(spawner.active_tasks())
 
     tasks = state.list_tasks(status=filter or None)
-    result = [
-        {
+    result = []
+    for t in tasks:
+        entry = {
             "id": t.id,
             "title": t.title,
             "status": t.status,
@@ -108,8 +109,12 @@ async def sefirot_status(filter: str = "") -> str:
             "session_id": t.session_id,
             "process_running": t.id in active,
         }
-        for t in tasks
-    ]
+        if t.id in active:
+            progress = spawner.get_progress(t.id)
+            if progress:
+                # Show only last 5 entries to keep context small
+                entry["progress"] = progress[-5:]
+        result.append(entry)
     return json.dumps(result, ensure_ascii=False)
 
 
