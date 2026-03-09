@@ -1,0 +1,19 @@
+{
+  "source": "docs/tasks/20260310_0411_toyプログラム作成.md",
+  "milestones": [
+    {
+      "milestone": 1,
+      "goal": "src/toy/ と tests/toy/ のディレクトリ構造・__init__.py が作成され、pytest tests/toy/ が 0 テストで正常終了する",
+      "verification": "pytest tests/toy/",
+      "done": false,
+      "tasks": []
+    },
+    {
+      "milestone": 2,
+      "goal": "fizzbuzz・fibonacci・factorial・palindrome・caesar・prime・reverse・binary_search の全8プログラムが実装され、各テストファイルの正常系・境界値・異常系テストが全て pass する",
+      "verification": "pytest tests/toy/",
+      "done": false,
+      "tasks": []
+    }
+  ]
+}
