@@ -59,7 +59,7 @@ __QUESTION_QUEUE_SECTION__
 
 ## ステップ6: セッションログの保存
 
-作業の記録を `.sefirot/sessions/` に保存する。
+作業の記録を保存する。
 
 まず Bash で以下を実行し、タイムスタンプを取得する:
 
@@ -69,7 +69,7 @@ TZ=Asia/Tokyo date +%Y%m%d_%H%M
 
 この出力結果（例: `20260219_1430`）をそのままファイル名に使う:
 
-ファイル名: `.sefirot/sessions/{出力結果}_{日本語の作業内容}.md`（例: `.sefirot/sessions/20260219_1430_Sentenceモデル実装.md`）
+ファイル名: `__SESSIONS_DIR__/{出力結果}_{日本語の作業内容}.md`（例: `__SESSIONS_DIR__/20260219_1430_Sentenceモデル実装.md`）
 
 内容は **10行程度** で簡潔に:
 

@@ -70,7 +70,7 @@ def loop(
 def status() -> None:
     """Show milestones.json status summary."""
     root = _find_root()
-    ms_file = root / "milestones.json"
+    ms_file = root / ".sefirot" / "milestones.json"
 
     if not ms_file.exists():
         click.echo("No milestones.json found. Run /plan and /gen-milestones first.", err=True)
@@ -105,7 +105,7 @@ def status() -> None:
 def questions() -> None:
     """Show and optionally clear pending questions."""
     root = _find_root()
-    ms_file = root / "milestones.json"
+    ms_file = root / ".sefirot" / "milestones.json"
 
     if not ms_file.exists():
         click.echo("No milestones.json found.", err=True)

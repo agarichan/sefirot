@@ -40,9 +40,9 @@ sefirot loop --from-skill $ARGUMENTS
 
 ### ステップ2: 質問の処理
 
-終了コード 10 の場合、エージェントからの質問が `milestones.json` の `$.questions` 配列に格納されている。
+終了コード 10 の場合、エージェントからの質問が `.sefirot/milestones.json` の `$.questions` 配列に格納されている。
 
-1. `milestones.json` を読み、`questions` 配列を取得する
+1. `.sefirot/milestones.json` を読み、`questions` 配列を取得する
 2. 各質問について:
    - 質問内容をユーザーに提示する。フォーマット:
 
@@ -53,7 +53,7 @@ sefirot loop --from-skill $ARGUMENTS
 
    - ユーザーの回答を待つ
    - 回答を関連する設計ドキュメントに反映する:
-     a. `milestones.json` から該当タスクの所属する Milestone を特定する
+     a. `.sefirot/milestones.json` から該当タスクの所属する Milestone を特定する
      b. その Milestone の `plan_doc` フィールドから設計ドキュメントのパスを取得する
      c. 設計ドキュメント内の該当タスクのセクションに「追加指示」として回答を追記する:
         ```markdown
@@ -61,7 +61,7 @@ sefirot loop --from-skill $ARGUMENTS
         - Q: {元の質問}
         - A: {ユーザーの回答}
         ```
-3. 全ての質問を処理したら、`milestones.json` の `questions` 配列を空にする（`"questions": []`）
+3. 全ての質問を処理したら、`.sefirot/milestones.json` の `questions` 配列を空にする（`"questions": []`）
 4. 変更をコミットする:
    ```bash
    git add -A && git commit -m "chore: resolve agent questions"
@@ -72,7 +72,7 @@ sefirot loop --from-skill $ARGUMENTS
 
 ループが正常完了（終了コード 0）したら、結果を報告する:
 
-1. `milestones.json` を読み、現在の状態を把握する
+1. `.sefirot/milestones.json` を読み、現在の状態を把握する
 2. 以下の情報を報告する:
    - 完了した Milestone とそのゴール
    - 完了したタスクの一覧

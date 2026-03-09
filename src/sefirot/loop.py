@@ -51,10 +51,11 @@ class LoopEngine:
         self.session_timeout = session_timeout
         self.model = model
 
-        self.milestones_file = root / "milestones.json"
+        self.milestones_file = root / ".sefirot" / "milestones.json"
+        self.milestones_file.parent.mkdir(parents=True, exist_ok=True)
         self.prompts_dir = self._find_prompts_dir()
+        # sessions_dir is set per-lifecycle in run() after loading milestones
         self.sessions_dir = root / ".sefirot" / "sessions"
-        self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
     def _find_prompts_dir(self) -> Path:
         """Find prompts directory - check project-local first, then package."""
@@ -109,9 +110,30 @@ class LoopEngine:
 
     # --- Main Loop ---
 
+    def _lifecycle_name(self, data: dict) -> str:
+        """Extract lifecycle directory name from source doc path."""
+        source = data.get("source", "")
+        if source:
+            return Path(source).parent.name
+        return "default"
+
+    def _source_dir(self, data: dict) -> str:
+        """Get source doc directory path (relative to root)."""
+        source = data.get("source", "")
+        if source:
+            return str(Path(source).parent)
+        return "docs/tasks"
+
     def run(self) -> int:
         """Run the main loop. Returns exit code."""
         data = self.load_milestones()
+
+        # Set lifecycle-specific sessions directory
+        self.sessions_dir = (
+            self.root / ".sefirot" / "sessions" / self._lifecycle_name(data)
+        )
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+
         milestones = data.get("milestones", [])
 
         if not milestones:
@@ -439,7 +461,13 @@ class LoopEngine:
         if not self.from_skill:
             return ""
 
-        if agent == "builder":
+        if agent == "planner":
+            examples = (
+                "- 設計ドキュメントに未決事項（どの機能を追加するか、どの方式を採用するか等）が明記されている\n"
+                "- 要件が曖昧で、解釈次第で設計が大きく異なる\n"
+                "- 技術選定やアーキテクチャ方針について設計者の判断が必要"
+            )
+        elif agent == "builder":
             examples = (
                 "- Ambiguous requirements where both interpretations lead to significantly different implementations\n"
                 "- Missing information that cannot be inferred from the design doc or existing code\n"
@@ -452,16 +480,26 @@ class LoopEngine:
                 "- Ambiguities in how to resolve integration issues between multiple builders' work"
             )
 
+        ms_path = str(self.milestones_file)
+
         # Builder runs in a worktree, so it must use the absolute path
         # to write to the main repo's milestones.json (not the worktree copy).
-        ms_path = str(self.milestones_file)
+        if agent == "builder":
+            path_note = (
+                "作業をブロックする重大な疑問がある場合、**メインリポジトリの** "
+                f"`{ms_path}` の `questions` 配列に質問を追加してください。\n\n"
+                "**重要**: worktree 内の milestones.json ではなく、上記の絶対パスのファイルに書き込むこと。\n\n"
+            )
+        else:
+            path_note = (
+                "作業をブロックする重大な疑問がある場合、"
+                f"`{ms_path}` の `questions` 配列に質問を追加してください。\n\n"
+            )
 
         return (
             "## 質問キュー\n\n"
             "このセッションはユーザーとの対話チャネルが有効です。\n"
-            "作業をブロックする重大な疑問がある場合、**メインリポジトリの** "
-            f"`{ms_path}` の `questions` 配列に質問を追加してください。\n\n"
-            "**重要**: worktree 内の milestones.json ではなく、上記の絶対パスのファイルに書き込むこと。\n\n"
+            f"{path_note}"
             '```json\n'
             f'{{"agent": "{agent}", "task_id": "<your-task-id>", '
             '"question": "質問内容", "timestamp": "<ISO datetime>"}\n'
@@ -483,13 +521,17 @@ class LoopEngine:
             if source_path.exists():
                 source_content = source_path.read_text(encoding="utf-8")
 
+        source_dir = self._source_dir(data)
+
         replacements = {
             "__MILESTONE_NUMBER__": str(ms["milestone"]),
             "__MILESTONE_GOAL__": ms.get("goal", ""),
             "__MILESTONE_VERIFICATION__": ms.get("verification", ""),
             "__SOURCE_DOC__": source_doc,
             "__SOURCE_CONTENT__": source_content,
+            "__SOURCE_DIR__": source_dir,
             "__MILESTONES_JSON_PATH__": str(self.milestones_file),
+            "__QUESTION_QUEUE_SECTION__": self._question_queue_section("planner"),
         }
 
         prompt = template
@@ -516,6 +558,7 @@ class LoopEngine:
             "__TASK_DESCRIPTION__": task.get("description", ""),
             "__PLAN_DOC__": plan_doc,
             "__PLAN_CONTENT__": plan_content,
+            "__SESSIONS_DIR__": str(self.sessions_dir),
             "__MILESTONES_JSON_PATH__": str(self.milestones_file),
             "__QUESTION_QUEUE_SECTION__": self._question_queue_section("builder"),
         }

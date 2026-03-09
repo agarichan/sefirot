@@ -33,9 +33,10 @@ def project_dir(tmp_path: Path) -> Path:
 
 
 def make_milestones(project_dir: Path, milestones: list[dict], **extra) -> Path:
-    """Write milestones.json and return its path."""
+    """Write .sefirot/milestones.json and return its path."""
     data = {"source": "", "questions": [], "milestones": milestones, **extra}
-    ms_file = project_dir / "milestones.json"
+    ms_file = project_dir / ".sefirot" / "milestones.json"
+    ms_file.parent.mkdir(parents=True, exist_ok=True)
     ms_file.write_text(json.dumps(data, indent=2) + "\n")
     return ms_file
 
@@ -54,6 +55,11 @@ class TestLoopEngine:
         engine = LoopEngine(project_dir)
         with pytest.raises(SystemExit):
             engine.load_milestones()
+
+    def test_milestones_file_path(self, project_dir: Path) -> None:
+        """milestones.json は .sefirot/ 配下に配置される。"""
+        engine = LoopEngine(project_dir)
+        assert engine.milestones_file == project_dir / ".sefirot" / "milestones.json"
 
     def test_question_queue(self, project_dir: Path) -> None:
         make_milestones(project_dir, [])
@@ -135,6 +141,19 @@ class TestLoopEngine:
         engine = LoopEngine(project_dir)
         assert engine.prompts_dir == project_dir / ".sefirot" / "prompts"
 
+    def test_lifecycle_sessions_dir(self, project_dir: Path) -> None:
+        """sessions_dir はライフサイクルごとのサブディレクトリになる。"""
+        make_milestones(
+            project_dir, [],
+            source="docs/tasks/20260310_0437_toy新機能追加/design.md",
+        )
+        engine = LoopEngine(project_dir, dry_run=True)
+        # run() がライフサイクル別 sessions_dir を設定する
+        data = engine.load_milestones()
+        lifecycle = engine._lifecycle_name(data)
+        assert lifecycle == "20260310_0437_toy新機能追加"
+        assert engine._source_dir(data) == "docs/tasks/20260310_0437_toy新機能追加"
+
     def test_collect_handoff_notes_empty(self, project_dir: Path) -> None:
         make_milestones(project_dir, [])
         engine = LoopEngine(project_dir)
@@ -146,6 +165,7 @@ class TestLoopEngine:
         engine = LoopEngine(project_dir)
 
         # Create a fake builder log with stream-json
+        engine.sessions_dir.mkdir(parents=True, exist_ok=True)
         logfile = engine.sessions_dir / "builder-task-1.log"
         events = [
             json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}}),
@@ -164,6 +184,17 @@ class TestLoopEngine:
         section = engine._question_queue_section("builder")
         assert "質問キュー" in section
         assert '"agent": "builder"' in section
+
+    def test_question_queue_section_planner(self, project_dir: Path) -> None:
+        """--from-skill のとき planner にも質問キューセクションが注入される。"""
+        make_milestones(project_dir, [])
+        engine = LoopEngine(project_dir, from_skill=True)
+        section = engine._question_queue_section("planner")
+        assert "質問キュー" in section
+        assert '"agent": "planner"' in section
+        assert "未決事項" in section
+        # planner は worktree で動かないので worktree の注意書きがないこと
+        assert "worktree" not in section
 
     def test_question_queue_section_not_from_skill(self, project_dir: Path) -> None:
         """--from-skill なしのとき質問キューセクションは空。"""
