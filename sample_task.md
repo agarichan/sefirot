@@ -69,9 +69,9 @@ tests/toy/
 - `reverse_string(s: str) -> str`: 文字列を反転
 - `reverse_words(s: str) -> str`: 単語の順序を反転（"hello world" → "world hello"）
 
-### 8. binary_search.py
+### 8. ????.py
 
-- `binary_search(arr: list[int], target: int) -> int`: ソート済みリストから target のインデックスを返す。見つからなければ -1。
+- 実装時に考えるので他のプログラムを実装する前に質問してほしい。
 
 ## テスト方針
 
