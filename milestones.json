@@ -20,17 +20,57 @@
       "milestone": 2,
       "goal": "fizzbuzz・fibonacci・factorial・palindrome・caesar・prime・reverse・binary_search の全8プログラムが実装され、各テストファイルの正常系・境界値・異常系テストが全て pass する",
       "verification": "pytest tests/toy/",
-      "done": false,
+      "done": true,
       "plan_doc": "docs/tasks/20260310_0418_milestone-2.md",
       "tasks": [
-        {"id": "impl-fizzbuzz", "description": "ドキュメント milestone-2 のステップ A（fizzbuzz）を実装する", "wave": 1, "done": false},
-        {"id": "impl-fibonacci", "description": "ドキュメント milestone-2 のステップ B（fibonacci）を実装する", "wave": 1, "done": false},
-        {"id": "impl-factorial", "description": "ドキュメント milestone-2 のステップ C（factorial）を実装する", "wave": 1, "done": false},
-        {"id": "impl-palindrome", "description": "ドキュメント milestone-2 のステップ D（palindrome）を実装する", "wave": 1, "done": false},
-        {"id": "impl-caesar", "description": "ドキュメント milestone-2 のステップ E（caesar）を実装する", "wave": 1, "done": false},
-        {"id": "impl-prime", "description": "ドキュメント milestone-2 のステップ F（prime）を実装する", "wave": 1, "done": false},
-        {"id": "impl-reverse", "description": "ドキュメント milestone-2 のステップ G（reverse）を実装する", "wave": 1, "done": false},
-        {"id": "impl-binary-search", "description": "ドキュメント milestone-2 のステップ H（binary_search）を実装する", "wave": 1, "done": false}
+        {
+          "id": "impl-fizzbuzz",
+          "description": "ドキュメント milestone-2 のステップ A（fizzbuzz）を実装する",
+          "wave": 1,
+          "done": true
+        },
+        {
+          "id": "impl-fibonacci",
+          "description": "ドキュメント milestone-2 のステップ B（fibonacci）を実装する",
+          "wave": 1,
+          "done": true
+        },
+        {
+          "id": "impl-factorial",
+          "description": "ドキュメント milestone-2 のステップ C（factorial）を実装する",
+          "wave": 1,
+          "done": true
+        },
+        {
+          "id": "impl-palindrome",
+          "description": "ドキュメント milestone-2 のステップ D（palindrome）を実装する",
+          "wave": 1,
+          "done": true
+        },
+        {
+          "id": "impl-caesar",
+          "description": "ドキュメント milestone-2 のステップ E（caesar）を実装する",
+          "wave": 1,
+          "done": true
+        },
+        {
+          "id": "impl-prime",
+          "description": "ドキュメント milestone-2 のステップ F（prime）を実装する",
+          "wave": 1,
+          "done": true
+        },
+        {
+          "id": "impl-reverse",
+          "description": "ドキュメント milestone-2 のステップ G（reverse）を実装する",
+          "wave": 1,
+          "done": true
+        },
+        {
+          "id": "impl-binary-search",
+          "description": "ドキュメント milestone-2 のステップ H（binary_search）を実装する",
+          "wave": 1,
+          "done": true
+        }
       ]
     }
   ]
