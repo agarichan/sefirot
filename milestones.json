@@ -6,7 +6,10 @@
       "goal": "src/toy/ と tests/toy/ のディレクトリ構造・__init__.py が作成され、pytest tests/toy/ が 0 テストで正常終了する",
       "verification": "pytest tests/toy/",
       "done": false,
-      "tasks": []
+      "plan_doc": "docs/tasks/20260310_0415_milestone-1.md",
+      "tasks": [
+        {"id": "setup-toy-directories", "description": "ドキュメント milestone-1 のステップ A（ディレクトリ構造・__init__.py 作成）を実装する", "wave": 1, "done": false}
+      ]
     },
     {
       "milestone": 2,
