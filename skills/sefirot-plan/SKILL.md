@@ -1,5 +1,5 @@
 ---
-name: plan
+name: sefirot-plan
 description: 設計ドキュメントを作成する (sefirot)
 ---
 

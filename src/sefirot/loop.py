@@ -62,7 +62,7 @@ class LoopEngine:
         if local.is_dir():
             return local
         # npx skills add でインストールされた場合
-        skills = self.root / ".claude" / "skills" / "loop" / "prompts"
+        skills = self.root / ".claude" / "skills" / "sefirot-loop" / "prompts"
         if skills.is_dir():
             return skills
         # Fall back to package templates

@@ -1,5 +1,5 @@
 ---
-name: loop
+name: sefirot-loop
 description: sefirotループを実行し、質問があればユーザーに確認する
 ---
 

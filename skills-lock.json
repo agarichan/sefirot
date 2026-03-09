@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "skills": {
+    "gen-milestones": {
+      "source": "agarichan/sefirot",
+      "sourceType": "github",
+      "computedHash": "f919e5e5bb46ab17e6c0efbd5b6cfc8bf8942ac7833fd63574fe6bc693124c3d"
+    },
+    "loop": {
+      "source": "agarichan/sefirot",
+      "sourceType": "github",
+      "computedHash": "ea1879193f9735b21986820eb0b80ffe0f61ed4085fada6241aae3a4d31ab624"
+    },
+    "plan": {
+      "source": "agarichan/sefirot",
+      "sourceType": "github",
+      "computedHash": "606339fea6b23c0f5ef1ef99aabd31ea394367f6a53229a932331c98fefc9b55"
+    }
+  }
+}

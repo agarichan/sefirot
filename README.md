@@ -29,13 +29,19 @@ Builder は Wave 単位で並列実行される。
 
 ## インストール
 
+### スキル（`/plan`, `/gen-milestones`, `/loop`）
+
 ```bash
-pip install -e .
-# or
-uv pip install -e .
+npx skills add agarichan/sefirot
 ```
 
-## セットアップ
+### CLI（`sefirot loop` コマンド）
+
+```bash
+uv tool install git+https://github.com/agarichan/sefirot.git
+```
+
+### セットアップ
 
 ```bash
 cd your-project
@@ -46,7 +52,6 @@ sefirot init
 
 - `.sefirot/` - 設定・セッションログ格納ディレクトリ
 - `.sefirot/prompts/` - エージェントプロンプト（カスタマイズ可能）
-- `.claude/commands/` - Claude Code スキル（`/plan`, `/gen-milestones`, `/loop`）
 
 ## 使い方
 

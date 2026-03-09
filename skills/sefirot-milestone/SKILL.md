@@ -1,5 +1,5 @@
 ---
-name: gen-milestones
+name: sefirot-milestone
 description: Milestoneを設計する (sefirot)
 ---
 
