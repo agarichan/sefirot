@@ -168,3 +168,7 @@ sefirot status
 - Python 3.11+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) がインストール済み
 - Git リポジトリ内で実行すること
+
+## 参考
+
+- [claude-looper](https://github.com/jujunjun110/claude-looper) - worktree を使った並列ビルドの着想元
