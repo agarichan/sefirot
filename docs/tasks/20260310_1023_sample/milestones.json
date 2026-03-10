@@ -1,0 +1,12 @@
+{
+  "source": "design.md",
+  "milestones": [
+    {
+      "milestone": 1,
+      "goal": "src/toy/ 配下で温度変換（C/F/K）と長さ変換の両モジュールが動作し、pytest tests/toy/ が全件パスする",
+      "verification": "pytest tests/toy/",
+      "done": false,
+      "tasks": []
+    }
+  ]
+}
