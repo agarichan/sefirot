@@ -1,71 +1,101 @@
-# Milestone 1: FizzBuzz 実装とディレクトリ構成の作成
+# Milestone 1: fibonacci プログラムの実装
 
 ## 概要
 
-`src/toy/` と `tests/toy/` のパッケージ構成を作成し、fizzbuzz.py を実装してテストが通る状態にする。
+`src/toy/` 配下に fibonacci（フィボナッチ数列）プログラムを実装し、対応するテストを作成する。ディレクトリ構成（`__init__.py`）も含めてセットアップする。
 
 ## タスク一覧
 
-| ステップ | タスク ID | Wave | 概要 |
-|---|---|---|---|
-| A | setup-and-impl-fizzbuzz | 1 | ディレクトリ構成の作成と FizzBuzz の実装・テスト |
+| ステップ | タスクID | Wave | 概要 |
+|----------|----------|------|------|
+| A | setup-and-impl-fibonacci | W1 | ディレクトリ構成作成と fibonacci 実装・テスト |
 
 ## タスク詳細
 
-### ステップ A: setup-and-impl-fizzbuzz（Wave 1）
+### ステップ A: setup-and-impl-fibonacci（Wave 1）
 
 #### 作成するファイル
 
 - `src/toy/__init__.py`
-- `src/toy/fizzbuzz.py`
+- `src/toy/fibonacci.py`
 - `tests/toy/__init__.py`
-- `tests/toy/test_fizzbuzz.py`
+- `tests/toy/test_fibonacci.py`
 
 #### 型定義・インターフェース
 
 ```python
-# src/toy/fizzbuzz.py
+# src/toy/fibonacci.py
 
-def fizzbuzz(n: int) -> list[str]:
-    """1 から n までの FizzBuzz 結果をリストで返す。
+def fibonacci(n: int) -> list[int]:
+    """先頭 n 個のフィボナッチ数列を返す。
 
-    - 3 の倍数 → "Fizz"
-    - 5 の倍数 → "Buzz"
-    - 3 と 5 の両方の倍数 → "FizzBuzz"
-    - それ以外 → 数字の文字列（例: "1", "2", "4"）
+    数列: 0, 1, 1, 2, 3, 5, 8, 13, ...
 
     Args:
-        n: 正の整数
+        n: 取得する個数（0以上の整数）
 
     Returns:
         長さ n のリスト
     """
+    ...
+
+def fib(n: int) -> int:
+    """n 番目のフィボナッチ数を返す（0-indexed）。
+
+    fib(0) = 0, fib(1) = 1, fib(2) = 1, fib(3) = 2, ...
+
+    Args:
+        n: 0以上の整数
+
+    Returns:
+        n 番目のフィボナッチ数
+    """
+    ...
 ```
+
+#### `__init__.py` について
+
+- `src/toy/__init__.py` — 空ファイル（パッケージ認識用）
+- `tests/toy/__init__.py` — 空ファイル（パッケージ認識用）
 
 #### import 先（既存コード）
 
-なし。外部ライブラリ・プロジェクト内の既存コードへの依存はない。
+なし。外部ライブラリや既存コードへの依存はない。
 
 #### 実装パターン
 
-- `src/toy/__init__.py` と `tests/toy/__init__.py` は空ファイル（パッケージ初期化のみ）
-- `fizzbuzz` 関数は純粋関数として実装する。ループで 1 から n まで回し、条件分岐で文字列を決定してリストに追加するシンプルな実装でよい
+- `fibonacci(n)`: n <= 0 で空リスト、n == 1 で `[0]`、それ以上はループで `result[-2] + result[-1]` を追加
+- `fib(n)`: n <= 0 で 0 を返す。2 変数（a, b）のイテレーションで n 番目を計算
 
 #### テスト仕様
 
-`tests/toy/test_fizzbuzz.py` で以下をカバーする:
-
 ```python
+# tests/toy/test_fibonacci.py
 import pytest
-from toy.fizzbuzz import fizzbuzz
+from toy.fibonacci import fibonacci, fib
 ```
 
-- **正常系**: `fizzbuzz(15)` の結果が正しいこと（"1", "2", "Fizz", "4", "Buzz", ..., "14", "FizzBuzz"）
-- **境界値**: `fizzbuzz(1)` → `["1"]`
-- **Fizz のみ**: 3 番目の要素が `"Fizz"` であること
-- **Buzz のみ**: 5 番目の要素が `"Buzz"` であること
-- **FizzBuzz**: 15 番目の要素が `"FizzBuzz"` であること
+以下のテストケースを実装する:
+
+**`fibonacci` 関数:**
+
+| テスト関数名 | 入力 | 期待値 | 分類 |
+|-------------|------|--------|------|
+| `test_fibonacci_7` | `fibonacci(7)` | `[0, 1, 1, 2, 3, 5, 8]` | 正常系 |
+| `test_fibonacci_0` | `fibonacci(0)` | `[]` | 境界値 |
+| `test_fibonacci_1` | `fibonacci(1)` | `[0]` | 境界値 |
+| `test_fibonacci_2` | `fibonacci(2)` | `[0, 1]` | 境界値 |
+
+**`fib` 関数:**
+
+| テスト関数名 | 入力 | 期待値 | 分類 |
+|-------------|------|--------|------|
+| `test_fib_0` | `fib(0)` | `0` | 境界値 |
+| `test_fib_1` | `fib(1)` | `1` | 境界値 |
+| `test_fib_5` | `fib(5)` | `5` | 正常系 |
+| `test_fib_10` | `fib(10)` | `55` | 正常系 |
 
 #### 注意事項
 
-- `pytest tests/toy/` で実行するため、`src/toy/` が Python パスに含まれている必要がある。`pyproject.toml` の `[tool.hatch.build.targets.wheel]` には `src/sefirot` のみ指定されているが、`pytest` は `src/` をルートとして認識するため、`from toy.fizzbuzz import fizzbuzz` で import できる。もし import エラーが発生する場合は `pyproject.toml` の `testpaths` 設定や `pythonpath` 設定を確認すること
+- `pyproject.toml` の `pythonpath = ["src"]` により、import は `from toy.fibonacci import ...` で行う
+- `pyproject.toml` は変更不要（既に設定済み）
