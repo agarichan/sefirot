@@ -33,10 +33,6 @@ tests/toy/
 
 - 実装時に考えるので他のプログラムを実装する前に質問してほしい。
 
-#### 追加指示（ユーザー回答）
-- Q: Milestone 1 で実装する2つ目の toy プログラムの種類を決めてください。設計ドキュメントでは未定（????.py）となっています。例: fibonacci, palindrome, factorial, caesar, prime, reverse, binary_search など。どのプログラムを実装しますか？
-- A: fibonacci
-
 ## テスト方針
 
 - 各テストファイルで正常系・境界値・異常系をカバーする
