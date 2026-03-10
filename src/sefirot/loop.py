@@ -483,7 +483,7 @@ class LoopEngine:
 
         logfile = self.sessions_dir / f"builder-{task_id}.log"
 
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        env = dict(os.environ)
         env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
 
         try:
@@ -592,7 +592,7 @@ class LoopEngine:
 
         logfile = self.sessions_dir / f"{session_name}.log"
 
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        env = dict(os.environ)
 
         async def _run() -> tuple[int, str]:
             proc = await asyncio.create_subprocess_exec(
