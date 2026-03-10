@@ -215,6 +215,7 @@ class LoopEngine:
 
     def run(self) -> int:
         """Run the main loop. Returns exit code."""
+        self._progress(f"ループ開始: {self.task_dir}")
         data = self.load_milestones()
 
         # Set lifecycle-specific sessions directory
