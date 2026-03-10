@@ -14,12 +14,5 @@
       ]
     }
   ],
-  "questions": [
-    {
-      "agent": "planner",
-      "task_id": "length-conversion",
-      "question": "長さ変換の対応単位について: メートル法のみ（mm, cm, m, km）にしますか？それともヤード・ポンド法（inch, feet, yard, mile）も含めますか？現在はメートル法のみで設計しています。",
-      "timestamp": "2026-03-11T00:00:00+09:00"
-    }
-  ]
+  "questions": []
 }
