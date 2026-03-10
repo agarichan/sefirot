@@ -19,6 +19,27 @@ def _find_root() -> Path:
     return cwd
 
 
+def _find_milestones_file(root: Path, task_dir: str | None) -> Path:
+    """Find milestones.json in task directory."""
+    if task_dir:
+        return root / task_dir / "milestones.json"
+    # Auto-discover
+    candidates = sorted((root / "docs" / "tasks").glob("*/milestones.json"))
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        return root / "docs" / "tasks" / "milestones.json"  # will not exist → triggers error
+    # Multiple - try to find active one
+    for c in candidates:
+        try:
+            data = json.loads(c.read_text(encoding="utf-8"))
+            if any(not m.get("done") for m in data.get("milestones", [])):
+                return c
+        except (json.JSONDecodeError, OSError):
+            continue
+    return candidates[-1]
+
+
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 def main(verbose: bool) -> None:
@@ -40,12 +61,14 @@ def main(verbose: bool) -> None:
 @click.option("--dry-run", is_flag=True, help="Show execution plan without running")
 @click.option("--max-parallel", type=int, default=8, help="Max concurrent builders")
 @click.option("--model", default="opus", help="Claude model to use")
+@click.option("--task-dir", default=None, help="Task directory containing milestones.json (auto-discovered if omitted)")
 def loop(
     from_skill: bool,
     milestone: int | None,
     dry_run: bool,
     max_parallel: int,
     model: str,
+    task_dir: str | None,
 ) -> None:
     """Run the Planner → Builder → Verifier loop."""
     from sefirot.loop import LoopEngine
@@ -53,6 +76,7 @@ def loop(
     root = _find_root()
     engine = LoopEngine(
         root,
+        task_dir=task_dir,
         from_skill=from_skill,
         milestone=milestone,
         dry_run=dry_run,
@@ -63,17 +87,86 @@ def loop(
     sys.exit(rc)
 
 
+# --- List command ---
+
+
+@main.command(name="list")
+@click.option("--active", is_flag=True, help="Show only tasks with incomplete milestones")
+@click.option("--no-milestones", is_flag=True, help="Show only task dirs without milestones.json")
+def list_cmd(active: bool, no_milestones: bool) -> None:
+    """List task directories and their status."""
+    root = _find_root()
+    tasks_root = root / "docs" / "tasks"
+    if not tasks_root.is_dir():
+        click.echo("No docs/tasks/ directory found. Run /plan and /milestone first.", err=True)
+        sys.exit(1)
+
+    # Collect all task directories (any subdirectory under docs/tasks/)
+    task_dirs = sorted(d for d in tasks_root.iterdir() if d.is_dir())
+    if not task_dirs:
+        click.echo("No task directories found. Run /plan first.", err=True)
+        sys.exit(1)
+
+    found = False
+    for d in task_dirs:
+        task_dir = d.relative_to(root)
+        ms_file = d / "milestones.json"
+
+        if not ms_file.exists():
+            if active:
+                continue
+            # Find design doc for display
+            design_docs = [f.name for f in d.glob("*.md")]
+            docs_str = ", ".join(design_docs) if design_docs else "no docs"
+            click.echo(f"{task_dir}  [NO MILESTONES]  ({docs_str})")
+            found = True
+            continue
+
+        if no_milestones:
+            continue
+
+        try:
+            data = json.loads(ms_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            if not active:
+                click.echo(f"{task_dir}  (error reading file)")
+                found = True
+            continue
+
+        milestones = data.get("milestones", [])
+        done = sum(1 for m in milestones if m.get("done"))
+        total = len(milestones)
+        is_complete = done == total
+
+        if active and is_complete:
+            continue
+
+        status_str = "COMPLETE" if is_complete else f"{done}/{total}"
+        goal = data.get("goal", "") or (milestones[0].get("goal", "") if milestones else "")
+        click.echo(f"{task_dir}  [{status_str}]  {goal[:60]}")
+        found = True
+
+    if not found:
+        if no_milestones:
+            click.echo("All task directories have milestones.json.", err=True)
+        elif active:
+            click.echo("No active tasks found.", err=True)
+        else:
+            click.echo("No task directories found.", err=True)
+
+
 # --- Status command ---
 
 
 @main.command()
-def status() -> None:
+@click.option("--task-dir", default=None, help="Task directory containing milestones.json (auto-discovered if omitted)")
+def status(task_dir: str | None) -> None:
     """Show milestones.json status summary."""
     root = _find_root()
-    ms_file = root / ".sefirot" / "milestones.json"
+    ms_file = _find_milestones_file(root, task_dir)
 
     if not ms_file.exists():
-        click.echo("No milestones.json found. Run /plan and /gen-milestones first.", err=True)
+        click.echo("No milestones.json found. Run /plan and /milestone first.", err=True)
         sys.exit(1)
 
     data = json.loads(ms_file.read_text(encoding="utf-8"))
@@ -102,10 +195,11 @@ def status() -> None:
 
 
 @main.command()
-def questions() -> None:
+@click.option("--task-dir", default=None, help="Task directory containing milestones.json (auto-discovered if omitted)")
+def questions(task_dir: str | None) -> None:
     """Show and optionally clear pending questions."""
     root = _find_root()
-    ms_file = root / ".sefirot" / "milestones.json"
+    ms_file = _find_milestones_file(root, task_dir)
 
     if not ms_file.exists():
         click.echo("No milestones.json found.", err=True)

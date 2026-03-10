@@ -10,6 +10,9 @@ import pytest
 from sefirot.loop import EXIT_QUESTIONS_PENDING, LoopEngine
 
 
+TASK_DIR = "docs/tasks/20260310_test"
+
+
 @pytest.fixture
 def project_dir(tmp_path: Path) -> Path:
     """Create a minimal project directory."""
@@ -17,6 +20,10 @@ def project_dir(tmp_path: Path) -> Path:
     sefirot_dir.mkdir()
     (sefirot_dir / "sessions").mkdir()
     (sefirot_dir / "prompts").mkdir()
+
+    # Create task directory
+    task_dir = tmp_path / TASK_DIR
+    task_dir.mkdir(parents=True)
 
     # Create minimal prompt templates
     for name in ("planner", "builder", "verifier"):
@@ -32,10 +39,10 @@ def project_dir(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def make_milestones(project_dir: Path, milestones: list[dict], **extra) -> Path:
-    """Write .sefirot/milestones.json and return its path."""
-    data = {"source": "", "questions": [], "milestones": milestones, **extra}
-    ms_file = project_dir / ".sefirot" / "milestones.json"
+def make_milestones(project_dir: Path, milestones: list[dict], task_dir: str = TASK_DIR, **extra) -> Path:
+    """Write milestones.json in the task directory and return its path."""
+    data = {"source": "design.md", "questions": [], "milestones": milestones, **extra}
+    ms_file = project_dir / task_dir / "milestones.json"
     ms_file.parent.mkdir(parents=True, exist_ok=True)
     ms_file.write_text(json.dumps(data, indent=2) + "\n")
     return ms_file
@@ -46,24 +53,25 @@ class TestLoopEngine:
         make_milestones(project_dir, [
             {"milestone": 1, "goal": "Setup", "done": False, "tasks": []},
         ])
-        engine = LoopEngine(project_dir)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR)
         data = engine.load_milestones()
         assert len(data["milestones"]) == 1
         assert data["milestones"][0]["goal"] == "Setup"
 
     def test_load_milestones_missing(self, project_dir: Path) -> None:
-        engine = LoopEngine(project_dir)
+        engine = LoopEngine(project_dir, task_dir="docs/tasks/nonexistent")
         with pytest.raises(SystemExit):
             engine.load_milestones()
 
     def test_milestones_file_path(self, project_dir: Path) -> None:
-        """milestones.json は .sefirot/ 配下に配置される。"""
-        engine = LoopEngine(project_dir)
-        assert engine.milestones_file == project_dir / ".sefirot" / "milestones.json"
+        """milestones.json はタスクディレクトリ配下に配置される。"""
+        make_milestones(project_dir, [])
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR)
+        assert engine.milestones_file == project_dir / TASK_DIR / "milestones.json"
 
     def test_question_queue(self, project_dir: Path) -> None:
         make_milestones(project_dir, [])
-        engine = LoopEngine(project_dir)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR)
         data = engine.load_milestones()
 
         assert not engine.has_pending_questions(data)
@@ -81,7 +89,7 @@ class TestLoopEngine:
         make_milestones(project_dir, [
             {"milestone": 1, "goal": "Setup", "done": False, "tasks": []},
         ])
-        engine = LoopEngine(project_dir)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR)
         data = engine.load_milestones()
         data["milestones"][0]["done"] = True
         engine.save_milestones(data)
@@ -100,7 +108,7 @@ class TestLoopEngine:
                 ],
             },
         ])
-        engine = LoopEngine(project_dir, dry_run=True)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR, dry_run=True)
         rc = engine.run()
         assert rc == 0
 
@@ -108,7 +116,7 @@ class TestLoopEngine:
         make_milestones(project_dir, [
             {"milestone": 1, "goal": "Done", "done": True, "tasks": []},
         ])
-        engine = LoopEngine(project_dir)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR)
         rc = engine.run()
         assert rc == 0
 
@@ -124,7 +132,7 @@ class TestLoopEngine:
                 ],
             },
         ])
-        engine = LoopEngine(project_dir, milestone=2, dry_run=True)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR, milestone=2, dry_run=True)
         rc = engine.run()
         assert rc == 0
 
@@ -132,37 +140,33 @@ class TestLoopEngine:
         make_milestones(project_dir, [
             {"milestone": 1, "goal": "First", "done": False, "tasks": []},
         ])
-        engine = LoopEngine(project_dir, milestone=99)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR, milestone=99)
         rc = engine.run()
         assert rc == 1
 
     def test_prompts_dir_local_override(self, project_dir: Path) -> None:
         """Local .sefirot/prompts/ should take priority over package templates."""
-        engine = LoopEngine(project_dir)
+        make_milestones(project_dir, [])
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR)
         assert engine.prompts_dir == project_dir / ".sefirot" / "prompts"
 
     def test_lifecycle_sessions_dir(self, project_dir: Path) -> None:
-        """sessions_dir はライフサイクルごとのサブディレクトリになる。"""
-        make_milestones(
-            project_dir, [],
-            source="docs/tasks/20260310_0437_toy新機能追加/design.md",
-        )
-        engine = LoopEngine(project_dir, dry_run=True)
-        # run() がライフサイクル別 sessions_dir を設定する
-        data = engine.load_milestones()
-        lifecycle = engine._lifecycle_name(data)
-        assert lifecycle == "20260310_0437_toy新機能追加"
-        assert engine._source_dir(data) == "docs/tasks/20260310_0437_toy新機能追加"
+        """sessions_dir はタスクディレクトリ名から導出される。"""
+        td = "docs/tasks/20260310_0437_toy新機能追加"
+        make_milestones(project_dir, [], task_dir=td)
+        engine = LoopEngine(project_dir, task_dir=td, dry_run=True)
+        assert engine._lifecycle_name() == "20260310_0437_toy新機能追加"
+        assert engine._source_dir() == td
 
     def test_collect_handoff_notes_empty(self, project_dir: Path) -> None:
         make_milestones(project_dir, [])
-        engine = LoopEngine(project_dir)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR)
         notes = engine._collect_handoff_notes([{"id": "nonexistent"}])
         assert "No handoff notes" in notes
 
     def test_collect_handoff_notes_from_log(self, project_dir: Path) -> None:
         make_milestones(project_dir, [])
-        engine = LoopEngine(project_dir)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR)
 
         # Create a fake builder log with stream-json
         engine.sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -180,7 +184,7 @@ class TestLoopEngine:
     def test_question_queue_section_from_skill(self, project_dir: Path) -> None:
         """--from-skill のとき質問キューセクションが注入される。"""
         make_milestones(project_dir, [])
-        engine = LoopEngine(project_dir, from_skill=True)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR, from_skill=True)
         section = engine._question_queue_section("builder")
         assert "質問キュー" in section
         assert '"agent": "builder"' in section
@@ -188,7 +192,7 @@ class TestLoopEngine:
     def test_question_queue_section_planner(self, project_dir: Path) -> None:
         """--from-skill のとき planner にも質問キューセクションが注入される。"""
         make_milestones(project_dir, [])
-        engine = LoopEngine(project_dir, from_skill=True)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR, from_skill=True)
         section = engine._question_queue_section("planner")
         assert "質問キュー" in section
         assert '"agent": "planner"' in section
@@ -196,30 +200,30 @@ class TestLoopEngine:
         # planner は worktree で動かないので worktree の注意書きがないこと
         assert "worktree" not in section
 
-    def test_lifecycle_name_root_source_falls_back_to_default(self, project_dir: Path) -> None:
-        """source がルート直下のファイルの場合、lifecycle name は 'default' になる。"""
-        make_milestones(project_dir, [], source="sample_task.md")
+    def test_auto_discover_task_dir(self, project_dir: Path) -> None:
+        """task_dir 省略時に docs/tasks/ から自動探索される。"""
+        make_milestones(project_dir, [
+            {"milestone": 1, "goal": "Setup", "done": False, "tasks": []},
+        ])
         engine = LoopEngine(project_dir)
-        data = engine.load_milestones()
-        assert engine._lifecycle_name(data) == "default"
+        assert engine.task_dir == Path(TASK_DIR)
 
-    def test_source_dir_root_source_falls_back_to_docs_tasks(self, project_dir: Path) -> None:
-        """source がルート直下のファイルの場合、source_dir は 'docs/tasks' になる。"""
-        make_milestones(project_dir, [], source="sample_task.md")
+    def test_auto_discover_prefers_active(self, project_dir: Path) -> None:
+        """複数の milestones.json がある場合、未完了のものが選ばれる。"""
+        # Done task
+        make_milestones(project_dir, [
+            {"milestone": 1, "goal": "Done", "done": True, "tasks": []},
+        ], task_dir="docs/tasks/old_task")
+        # Active task
+        make_milestones(project_dir, [
+            {"milestone": 1, "goal": "Active", "done": False, "tasks": []},
+        ], task_dir="docs/tasks/new_task")
         engine = LoopEngine(project_dir)
-        data = engine.load_milestones()
-        assert engine._source_dir(data) == "docs/tasks"
-
-    def test_lifecycle_name_empty_source_falls_back_to_default(self, project_dir: Path) -> None:
-        """source が空の場合、lifecycle name は 'default' になる。"""
-        make_milestones(project_dir, [])
-        engine = LoopEngine(project_dir)
-        data = engine.load_milestones()
-        assert engine._lifecycle_name(data) == "default"
+        assert engine.task_dir == Path("docs/tasks/new_task")
 
     def test_question_queue_section_not_from_skill(self, project_dir: Path) -> None:
         """--from-skill なしのとき質問キューセクションは空。"""
         make_milestones(project_dir, [])
-        engine = LoopEngine(project_dir, from_skill=False)
+        engine = LoopEngine(project_dir, task_dir=TASK_DIR, from_skill=False)
         section = engine._question_queue_section("builder")
         assert section == ""

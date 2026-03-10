@@ -40,7 +40,7 @@ Claude Code 内で `/plan` を実行:
 /milestone docs/tasks/20260310_1430_OAuth2認証設計/design.md
 ```
 
-設計ドキュメントから `.sefirot/milestones.json` が生成される。各 Milestone は検証可能な単位に分割され、tasks は空の状態で作成される（Planner が後で埋める）。
+設計ドキュメントと同じディレクトリに `milestones.json` が生成される。各 Milestone は検証可能な単位に分割され、tasks は空の状態で作成される（Planner が後で埋める）。
 
 ### Step 3: ループ実行
 
@@ -91,7 +91,7 @@ sefirot status
 
 ### 質問が発生した場合
 
-Planner/Builder/Verifier が判断に迷うと `.sefirot/milestones.json` に質問を書き込み、ループが停止する（exit code 10）。
+Planner/Builder/Verifier が判断に迷うと `milestones.json` に質問を書き込み、ループが停止する（exit code 10）。
 
 `/loop` 経由の場合、スキルがユーザーに質問を提示し、回答を設計ドキュメントに反映してループを再開する:
 
@@ -108,11 +108,11 @@ Planner/Builder/Verifier が判断に迷うと `.sefirot/milestones.json` に質
 docs/tasks/
   20260310_1430_OAuth2認証設計/
     design.md              ← /plan で生成（git 管理）
-    milestone-1.md         ← Planner が生成（git 管理）
-    milestone-2.md
+    milestones.json        ← /milestone で生成（git 管理）
+    plan-m1.md             ← Planner が生成（git 管理）
+    plan-m2.md
 
 .sefirot/
-  milestones.json          ← ランタイム状態（git 管理外）
   sessions/
     20260310_1430_OAuth2認証設計/  ← ライフサイクルごと
       planner-m1.log

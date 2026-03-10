@@ -35,6 +35,7 @@ class LoopEngine:
         self,
         root: Path,
         *,
+        task_dir: Path | str | None = None,
         from_skill: bool = False,
         milestone: int | None = None,
         dry_run: bool = False,
@@ -52,11 +53,50 @@ class LoopEngine:
         self.session_timeout = session_timeout
         self.model = model
 
-        self.milestones_file = root / ".sefirot" / "milestones.json"
-        self.milestones_file.parent.mkdir(parents=True, exist_ok=True)
+        # Resolve task directory (where milestones.json lives)
+        if task_dir is not None:
+            self.task_dir = Path(task_dir)
+        else:
+            self.task_dir = self._discover_task_dir()
+        self.milestones_file = root / self.task_dir / "milestones.json"
         self.prompts_dir = self._find_prompts_dir()
-        # sessions_dir is set per-lifecycle in run() after loading milestones
+        # sessions_dir is set per-lifecycle in run()
         self.sessions_dir = root / ".sefirot" / "sessions"
+
+    def _discover_task_dir(self) -> Path:
+        """Auto-discover task directory containing milestones.json."""
+        tasks_root = self.root / "docs" / "tasks"
+        if not tasks_root.is_dir():
+            logger.error("docs/tasks/ directory not found. Specify --task-dir.")
+            self._print_action("ERROR", "docs/tasks/ directory not found. Specify --task-dir.")
+            sys.exit(1)
+        candidates = sorted(tasks_root.glob("*/milestones.json"))
+        if not candidates:
+            logger.error("No milestones.json found in docs/tasks/*/. Specify --task-dir.")
+            self._print_action("ERROR", "No milestones.json found in docs/tasks/*/. Specify --task-dir.")
+            sys.exit(1)
+        if len(candidates) == 1:
+            return candidates[0].parent.relative_to(self.root)
+        # Multiple found - prefer one with undone milestones
+        active = []
+        for c in candidates:
+            try:
+                data = json.loads(c.read_text(encoding="utf-8"))
+                if any(not m.get("done") for m in data.get("milestones", [])):
+                    active.append(c)
+            except (json.JSONDecodeError, OSError):
+                continue
+        if len(active) == 1:
+            return active[0].parent.relative_to(self.root)
+        if len(active) == 0:
+            # All done, use the last one
+            return candidates[-1].parent.relative_to(self.root)
+        # Multiple active - ambiguous
+        dirs = ", ".join(str(c.parent.relative_to(self.root)) for c in active)
+        msg = f"Multiple active milestones.json found: {dirs}. Specify --task-dir."
+        logger.error(msg)
+        self._print_action("ERROR", msg)
+        sys.exit(1)
 
     def _find_prompts_dir(self) -> Path:
         """Find prompts directory - check project-local first, then package."""
@@ -75,7 +115,9 @@ class LoopEngine:
     def load_milestones(self) -> dict:
         """Load milestones.json."""
         if not self.milestones_file.exists():
-            logger.error("milestones.json not found at %s", self.milestones_file)
+            msg = f"milestones.json not found at {self.milestones_file}"
+            logger.error(msg)
+            self._print_action("ERROR", msg)
             sys.exit(1)
         return json.loads(self.milestones_file.read_text(encoding="utf-8"))
 
@@ -109,25 +151,23 @@ class LoopEngine:
         data["questions"] = []
         return questions
 
+    # --- Action Output ---
+
+    @staticmethod
+    def _print_action(action: str, message: str) -> None:
+        """Print action directive for the caller (skill) to follow."""
+        print(f"\n[SEFIROT:ACTION] {action}")
+        print(f"[SEFIROT:MESSAGE] {message}")
+
     # --- Main Loop ---
 
-    def _lifecycle_name(self, data: dict) -> str:
-        """Extract lifecycle directory name from source doc path."""
-        source = data.get("source", "")
-        if source:
-            name = Path(source).parent.name
-            if name:
-                return name
-        return "default"
+    def _lifecycle_name(self) -> str:
+        """Extract lifecycle directory name from task_dir."""
+        return self.task_dir.name or "default"
 
-    def _source_dir(self, data: dict) -> str:
-        """Get source doc directory path (relative to root)."""
-        source = data.get("source", "")
-        if source:
-            parent = str(Path(source).parent)
-            if parent != ".":
-                return parent
-        return "docs/tasks"
+    def _source_dir(self) -> str:
+        """Get task directory path (relative to root)."""
+        return str(self.task_dir)
 
     def run(self) -> int:
         """Run the main loop. Returns exit code."""
@@ -135,7 +175,7 @@ class LoopEngine:
 
         # Set lifecycle-specific sessions directory
         self.sessions_dir = (
-            self.root / ".sefirot" / "sessions" / self._lifecycle_name(data)
+            self.root / ".sefirot" / "sessions" / self._lifecycle_name()
         )
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
@@ -143,6 +183,7 @@ class LoopEngine:
 
         if not milestones:
             logger.error("No milestones found in milestones.json")
+            self._print_action("ERROR", "No milestones found in milestones.json")
             return 1
 
         # Filter to target milestone if specified
@@ -153,6 +194,7 @@ class LoopEngine:
             ]
             if not milestones:
                 logger.error("Milestone %d not found", self.target_milestone)
+                self._print_action("ERROR", f"Milestone {self.target_milestone} not found")
                 return 1
 
         round_count = 0
@@ -164,7 +206,11 @@ class LoopEngine:
                 continue
 
             rc = self._run_milestone(data, ms)
+            if rc == EXIT_QUESTIONS_PENDING:
+                self._print_action("QUESTIONS_PENDING", "質問が保留中です。milestones.json の questions 配列を確認し、ユーザーに質問してください。回答を設計ドキュメントに反映した後、再度 sefirot loop を実行してください。")
+                return rc
             if rc != 0:
+                self._print_action("ERROR", f"Milestone {ms['milestone']} failed with exit code {rc}")
                 return rc
 
             round_count += 1
@@ -173,6 +219,7 @@ class LoopEngine:
                 break
 
         logger.info("All milestones completed")
+        self._print_action("COMPLETE", "全てのマイルストーンが完了しました。milestones.json を読み、完了したマイルストーンとタスクの一覧をユーザーに報告してください。")
         return 0
 
     def _reload_milestone(self, data: dict, ms_num: int) -> tuple[dict, dict]:
@@ -559,11 +606,15 @@ class LoopEngine:
         # Read source design doc if it exists
         source_content = ""
         if source_doc:
-            source_path = self.root / source_doc
+            # source can be absolute or relative to task_dir
+            source_path = self.root / self.task_dir / source_doc
+            if not source_path.exists():
+                # Try as absolute path from root (legacy format)
+                source_path = self.root / source_doc
             if source_path.exists():
                 source_content = source_path.read_text(encoding="utf-8")
 
-        source_dir = self._source_dir(data)
+        source_dir = self._source_dir()
 
         replacements = {
             "__MILESTONE_NUMBER__": str(ms["milestone"]),
