@@ -138,6 +138,8 @@ __QUESTION_QUEUE_SECTION__
 
 ## 絶対に守ること
 
+- **`AskUserQuestion` ツールは使用禁止。** このセッションは pipe モードで実行されるため対話ツールは動作しない。ユーザーへの質問は必ず質問キュー（上記参照）を使うこと
+
 - **コードは一切書かない。設計ドキュメントと milestones.json のタスク追加のみ行う**
 - **対象 Milestone 以外のエントリは変更しない**
 - **milestone, goal, done フィールドは変更しない。plan_doc と tasks のみ追加する**

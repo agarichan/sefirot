@@ -12,6 +12,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -212,8 +213,12 @@ class LoopEngine:
             tasks = ms.get("tasks", [])
 
             if not tasks:
-                logger.warning("Milestone %d has no tasks after planning", ms_num)
-                return 0
+                logger.error(
+                    "Milestone %d has no tasks after planning. "
+                    "Planner may have failed to generate tasks or ask questions.",
+                    ms_num,
+                )
+                return 1
 
             undone = [t for t in tasks if not t.get("done")]
             if not undone:
@@ -282,16 +287,30 @@ class LoopEngine:
 
     # --- Agent Runners ---
 
+    @staticmethod
+    def _fmt_elapsed(seconds: float) -> str:
+        """Format elapsed seconds as human-readable string."""
+        m, s = divmod(int(seconds), 60)
+        if m > 0:
+            return f"{m}m{s:02d}s"
+        return f"{s}s"
+
     def _run_planner(self, data: dict, ms: dict) -> int:
         """Run the Planner agent for a milestone."""
         logger.info("Running Planner for milestone %d...", ms["milestone"])
 
         prompt = self._build_planner_prompt(data, ms)
+        t0 = time.monotonic()
         rc, _ = self._invoke_claude(
             prompt,
             session_name=f"planner-m{ms['milestone']}",
             cwd=self.root,
         )
+        elapsed = self._fmt_elapsed(time.monotonic() - t0)
+        if rc == 0:
+            logger.info("Planner completed (%s)", elapsed)
+        else:
+            logger.error("Planner failed (%s)", elapsed)
         return rc
 
     async def _run_builders(
@@ -299,15 +318,27 @@ class LoopEngine:
     ) -> int:
         """Run Builder agents in parallel using worktrees."""
         sem = asyncio.Semaphore(self.max_parallel)
-        results: list[int] = []
+        total = len(wave_tasks)
+        completed = 0
+        t0 = time.monotonic()
 
         async def run_one(task: dict) -> int:
+            nonlocal completed
             async with sem:
-                return await self._run_single_builder(data, ms, task)
+                rc = await self._run_single_builder(data, ms, task)
+                completed += 1
+                elapsed = self._fmt_elapsed(time.monotonic() - t0)
+                status = "ok" if rc == 0 else f"FAILED(rc={rc})"
+                logger.info(
+                    "Builder [%d/%d] %s: %s (%s)",
+                    completed, total, task["id"], status, elapsed,
+                )
+                return rc
 
         coros = [run_one(t) for t in wave_tasks]
         results = await asyncio.gather(*coros)
 
+        elapsed = self._fmt_elapsed(time.monotonic() - t0)
         # Check for failures
         failures = [
             (t, rc)
@@ -315,9 +346,12 @@ class LoopEngine:
             if rc != 0
         ]
         if failures:
-            for t, rc in failures:
-                logger.error("Builder failed: %s (rc=%d)", t["id"], rc)
-            # Don't fail the whole loop - Verifier can handle fix tasks
+            logger.error(
+                "Builders finished with %d/%d failures (%s)",
+                len(failures), total, elapsed,
+            )
+        else:
+            logger.info("All %d builders completed (%s)", total, elapsed)
         return 0
 
     async def _run_single_builder(
@@ -325,7 +359,6 @@ class LoopEngine:
     ) -> int:
         """Run a single Builder agent in a worktree."""
         task_id = task["id"]
-        logger.info("Starting Builder: %s - %s", task_id, task.get("description", ""))
 
         prompt = self._build_builder_prompt(data, ms, task)
         worktree_name = f"sefirot-{task_id}"
@@ -372,7 +405,6 @@ class LoopEngine:
                 # Mark task done in milestones.json
                 task["done"] = True
                 self.save_milestones(data)
-                logger.info("Builder %s completed", task_id)
 
             return proc.returncode or 0
 
@@ -401,11 +433,17 @@ class LoopEngine:
             data, ms, done_tasks, is_milestone_complete
         )
 
+        t0 = time.monotonic()
         rc, _ = self._invoke_claude(
             prompt,
             session_name=f"verifier-m{ms['milestone']}-w{current_wave}",
             cwd=self.root,
         )
+        elapsed = self._fmt_elapsed(time.monotonic() - t0)
+        if rc == 0:
+            logger.info("Verifier completed (%s)", elapsed)
+        else:
+            logger.error("Verifier failed (%s)", elapsed)
         return rc
 
     # --- Claude Invocation ---
