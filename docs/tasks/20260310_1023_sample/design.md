@@ -54,7 +54,7 @@ class ConversionResult:
 ### 3. length.py（長さ変換）
 
 - `convert(value: float, from_unit: str, to_unit: str) -> ConversionResult`
-- 対応単位: ユーザーに確認して決める（メートル法のみにするか、ヤード・ポンド法も含めるか）
+- 対応単位: [要ユーザー確認] メートル法のみ（mm, cm, m, km）にするか、ヤード・ポンド法（inch, feet, yard, mile）も含めるか
 - 未対応の単位が指定された場合は `ValueError` を送出する
 
 ## テスト方針
