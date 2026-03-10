@@ -7,9 +7,11 @@ question queue support for skill integration.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -193,21 +195,41 @@ class LoopEngine:
     # --- Action Output ---
 
     def _init_output(self) -> None:
-        """Initialize output log file for progress reporting.
+        """Initialize output log and detect stdout capture file.
 
-        When running inside Claude Code (CLAUDECODE=1), child claude processes
-        can hijack the parent's stdout. We write to a dedicated log file instead
-        and print its path so the caller can tail it.
+        Claude Code's background tasks capture stdout to a file. Child claude
+        processes delete this file (see docs/claude-code-stdout-issue.md).
+        We detect the path via lsof and recreate it after each _emit call.
         """
         self._output_log = self.sessions_dir / "loop-output.log"
         self._output_fh = open(self._output_log, "w", encoding="utf-8")
-        # Print the log path to stdout before claude can hijack it
-        print(f"[SEFIROT:OUTPUT_LOG] {self._output_log}", flush=True)
+        self._stdout_capture = self._detect_stdout_capture()
+
+    @staticmethod
+    def _detect_stdout_capture() -> str | None:
+        """Detect the file path that stdout (fd 1) points to via lsof."""
+        try:
+            result = subprocess.run(
+                ["lsof", "-p", str(os.getpid()), "-a", "-d", "1", "-Fn"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                if line.startswith("n/"):
+                    return line[1:]
+        except Exception:
+            pass
+        return None
 
     def _emit(self, line: str) -> None:
-        """Write a line to the output log and flush."""
+        """Write a line to the output log and sync to stdout capture file."""
         self._output_fh.write(line + "\n")
         self._output_fh.flush()
+        if self._stdout_capture:
+            try:
+                import shutil
+                shutil.copy2(self._output_log, self._stdout_capture)
+            except Exception:
+                pass
 
     def _print_action(self, action: str, message: str) -> None:
         """Print action directive for the caller (skill) to follow."""
@@ -220,11 +242,16 @@ class LoopEngine:
 
     @staticmethod
     def _build_shell_command(cmd: list[str], logfile: Path) -> str:
-        """Build a shell command string that redirects stdout/stderr to logfile."""
+        """Build a shell command that redirects stdout/stderr to logfile.
+
+        Strips CLAUDECODE and CLAUDE_CODE_ENTRYPOINT to bypass the nested
+        session guard (see anthropics/claude-code#26190). Sets
+        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 for team-aware execution.
+        """
         import shlex
         escaped_cmd = " ".join(shlex.quote(str(c)) for c in cmd)
         escaped_log = shlex.quote(str(logfile))
-        return f"{escaped_cmd} < /dev/null > {escaped_log} 2>&1"
+        return f"env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 {escaped_cmd} < /dev/null > {escaped_log} 2>&1"
 
     # --- Main Loop ---
 
@@ -236,9 +263,45 @@ class LoopEngine:
         """Get task directory path (relative to root)."""
         return str(self.task_dir)
 
+    def _get_head(self) -> str:
+        """Return current HEAD commit hash."""
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(self.root), text=True,
+        ).strip()
+
+    def _soft_reset(self, commit: str) -> None:
+        """Soft-reset to commit, keeping all changes staged."""
+        subprocess.run(
+            ["git", "reset", "--soft", commit],
+            cwd=str(self.root), check=True,
+        )
+
+    def _cleanup_worktrees(self) -> None:
+        """Remove stale sefirot worktrees and branches from previous runs."""
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=str(self.root), capture_output=True,
+        )
+        result = subprocess.run(
+            ["git", "branch", "--list", "sefirot-*"],
+            cwd=str(self.root), capture_output=True, text=True,
+        )
+        for branch in result.stdout.splitlines():
+            branch = branch.strip()
+            if branch:
+                subprocess.run(
+                    ["git", "branch", "-D", branch],
+                    cwd=str(self.root), capture_output=True,
+                )
+
     def run(self) -> int:
         """Run the main loop. Returns exit code."""
         self._init_output()
+        self._cleanup_worktrees()
+        atexit.register(self._cleanup_worktrees)
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
+        initial_head = self._get_head()
         self._progress(f"ループ開始: {self.task_dir}")
         data = self.load_milestones()
 
@@ -276,9 +339,11 @@ class LoopEngine:
 
             rc = self._run_milestone(data, ms)
             if rc == EXIT_QUESTIONS_PENDING:
+                self._cleanup_worktrees()
                 self._print_action("QUESTIONS_PENDING", "質問が保留中です。milestones.json の questions 配列を確認し、ユーザーに質問してください。回答を設計ドキュメントに反映した後、再度 sefirot loop を実行してください。")
                 return rc
             if rc != 0:
+                self._cleanup_worktrees()
                 self._print_action("ERROR", f"Milestone {ms['milestone']} failed with exit code {rc}")
                 return rc
 
@@ -289,6 +354,13 @@ class LoopEngine:
 
         self._progress("全マイルストーン完了")
         logger.info("All milestones completed")
+
+        # Soft-reset intermediate commits, leaving all changes staged.
+        # This keeps main's history clean while preserving the work.
+        self._soft_reset(initial_head)
+        self._cleanup_worktrees()
+        self._progress("中間コミットをリセットし、変更をステージングに保持しました")
+
         self._print_action("COMPLETE", "全てのマイルストーンが完了しました。milestones.json を読み、完了したマイルストーンとタスクの一覧をユーザーに報告してください。")
         return 0
 
@@ -503,20 +575,19 @@ class LoopEngine:
             "--model", self.model,
             "--dangerously-skip-permissions",
             "--verbose",
-            "--team-name", f"sefirot-{task_id}",
+            "--team-name", "sefirot",
+            "--agent-id", task_id,
+            "--agent-name", f"builder-{task_id}",
             prompt,
         ]
 
         logfile = self.sessions_dir / f"builder-{task_id}.log"
-
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
         try:
             shell_cmd = self._build_shell_command(cmd, logfile)
             proc = await asyncio.create_subprocess_shell(
                 shell_cmd,
                 cwd=str(self.root),
-                env=env,
             )
 
             # Wait for completion with periodic heartbeat
@@ -606,20 +677,19 @@ class LoopEngine:
             "--model", self.model,
             "--dangerously-skip-permissions",
             "--verbose",
-            "--team-name", f"sefirot-{session_name}",
+            "--team-name", "sefirot",
+            "--agent-id", session_name,
+            "--agent-name", session_name,
             prompt,
         ]
 
         logfile = self.sessions_dir / f"{session_name}.log"
-
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
         async def _run() -> tuple[int, str]:
             shell_cmd = self._build_shell_command(cmd, logfile)
             proc = await asyncio.create_subprocess_shell(
                 shell_cmd,
                 cwd=str(cwd),
-                env=env,
             )
             t0 = time.monotonic()
 

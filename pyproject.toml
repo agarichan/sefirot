@@ -1,6 +1,6 @@
 [project]
 name = "sefirot"
-version = "0.3.0"
+version = "0.4.0"
 description = "Claude Code multi-agent orchestration framework"
 requires-python = ">=3.11"
 dependencies = [
