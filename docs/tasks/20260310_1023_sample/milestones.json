@@ -1,0 +1,12 @@
+{
+  "source": "design.md",
+  "milestones": [
+    {
+      "milestone": 1,
+      "goal": "src/toy/ 配下に共通型定義（ConversionResult）・温度変換（C/F/K 全方向）・長さ変換（mm/cm/m/km）が実装され、pytest tests/toy/ で全テストが通る",
+      "verification": "pytest tests/",
+      "done": false,
+      "tasks": []
+    }
+  ]
+}
