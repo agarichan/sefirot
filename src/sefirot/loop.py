@@ -195,8 +195,13 @@ class LoopEngine:
     @staticmethod
     def _print_action(action: str, message: str) -> None:
         """Print action directive for the caller (skill) to follow."""
-        print(f"\n[SEFIROT:ACTION] {action}")
-        print(f"[SEFIROT:MESSAGE] {message}")
+        print(f"\n[SEFIROT:ACTION] {action}", flush=True)
+        print(f"[SEFIROT:MESSAGE] {message}", flush=True)
+
+    @staticmethod
+    def _progress(msg: str) -> None:
+        """Print a highly visible progress line to stdout (flushed immediately)."""
+        print(f"[SEFIROT] {msg}", flush=True)
 
     # --- Main Loop ---
 
@@ -257,6 +262,7 @@ class LoopEngine:
                 logger.warning("Max rounds (%d) reached", self.max_rounds)
                 break
 
+        self._progress("全マイルストーン完了")
         logger.info("All milestones completed")
         self._print_action("COMPLETE", "全てのマイルストーンが完了しました。milestones.json を読み、完了したマイルストーンとタスクの一覧をユーザーに報告してください。")
         return 0
@@ -272,6 +278,7 @@ class LoopEngine:
     def _run_milestone(self, data: dict, ms: dict) -> int:
         """Run a single milestone through Planner → Wave(Builder → Verifier)."""
         ms_num = ms["milestone"]
+        self._progress(f"=== Milestone {ms_num}: {ms.get('goal', '')} ===")
         logger.info("=== Milestone %d: %s ===", ms_num, ms.get("goal", ""))
 
         # Phase A: Planning (if no tasks yet)
@@ -314,6 +321,7 @@ class LoopEngine:
             current_wave = min(t.get("wave", 1) for t in undone)
             wave_tasks = [t for t in undone if t.get("wave") == current_wave]
 
+            self._progress(f"--- Wave {current_wave} ({len(wave_tasks)} tasks) ---")
             logger.info("--- Wave %d (%d tasks) ---", current_wave, len(wave_tasks))
 
             if self.dry_run:
@@ -363,6 +371,7 @@ class LoopEngine:
         if not undone:
             ms["done"] = True
             self.save_milestones(data)
+            self._progress(f"=== Milestone {ms_num} 完了 ===")
             logger.info("=== Milestone %d completed ===", ms_num)
         else:
             logger.warning(
@@ -383,6 +392,7 @@ class LoopEngine:
 
     def _run_planner(self, data: dict, ms: dict) -> int:
         """Run the Planner agent for a milestone."""
+        self._progress(f"Planner 開始 (Milestone {ms['milestone']})")
         logger.info("Running Planner for milestone %d...", ms["milestone"])
 
         prompt = self._build_planner_prompt(data, ms)
@@ -394,8 +404,10 @@ class LoopEngine:
         )
         elapsed = self._fmt_elapsed(time.monotonic() - t0)
         if rc == 0:
+            self._progress(f"Planner 完了 ({elapsed})")
             logger.info("Planner completed (%s)", elapsed)
         else:
+            self._progress(f"Planner 失敗 ({elapsed})")
             logger.error("Planner failed (%s)", elapsed)
         return rc
 
@@ -415,6 +427,9 @@ class LoopEngine:
                 completed += 1
                 elapsed = self._fmt_elapsed(time.monotonic() - t0)
                 status = "ok" if rc == 0 else f"FAILED(rc={rc})"
+                self._progress(
+                    f"Builder [{completed}/{total}] {task['id']}: {status} ({elapsed})"
+                )
                 logger.info(
                     "Builder [%d/%d] %s: %s (%s)",
                     completed, total, task["id"], status, elapsed,
@@ -432,11 +447,13 @@ class LoopEngine:
             if rc != 0
         ]
         if failures:
+            self._progress(f"Builders: {len(failures)}/{total} 失敗 ({elapsed})")
             logger.error(
                 "Builders finished with %d/%d failures (%s)",
                 len(failures), total, elapsed,
             )
         else:
+            self._progress(f"Builders: 全 {total} 件完了 ({elapsed})")
             logger.info("All %d builders completed (%s)", total, elapsed)
         return 0
 
@@ -478,11 +495,22 @@ class LoopEngine:
                 env=env,
             )
 
-            # Send prompt via stdin
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(input=prompt.encode()),
-                timeout=self.session_timeout,
-            )
+            # Send prompt via stdin, with periodic heartbeat
+            t0 = time.monotonic()
+            comm_task = asyncio.create_task(proc.communicate(input=prompt.encode()))
+
+            while not comm_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(comm_task), timeout=30)
+                except asyncio.TimeoutError:
+                    elapsed_s = time.monotonic() - t0
+                    if elapsed_s >= self.session_timeout:
+                        comm_task.cancel()
+                        raise
+                    elapsed = self._fmt_elapsed(elapsed_s)
+                    self._progress(f"  builder-{task_id} 実行中... ({elapsed})")
+
+            stdout, stderr = comm_task.result()
 
             # Save session log
             logfile.write_bytes(stdout)
@@ -517,6 +545,7 @@ class LoopEngine:
             logger.warning("No completed tasks for Verifier to process")
             return 0
 
+        self._progress(f"Verifier 開始 ({len(done_tasks)} tasks)")
         logger.info("Running Verifier for %d tasks...", len(done_tasks))
 
         prompt = self._build_verifier_prompt(
@@ -531,8 +560,10 @@ class LoopEngine:
         )
         elapsed = self._fmt_elapsed(time.monotonic() - t0)
         if rc == 0:
+            self._progress(f"Verifier 完了 ({elapsed})")
             logger.info("Verifier completed (%s)", elapsed)
         else:
+            self._progress(f"Verifier 失敗 ({elapsed})")
             logger.error("Verifier failed (%s)", elapsed)
         return rc
 
@@ -545,7 +576,11 @@ class LoopEngine:
         session_name: str,
         cwd: Path,
     ) -> tuple[int, str]:
-        """Invoke Claude Code in pipe mode. Returns (returncode, stdout)."""
+        """Invoke Claude Code in pipe mode. Returns (returncode, stdout).
+
+        Runs the subprocess asynchronously so we can emit periodic heartbeat
+        logs while waiting, making progress visible in background execution.
+        """
         cmd = [
             "claude", "-p",
             "--output-format", "stream-json",
@@ -558,25 +593,37 @@ class LoopEngine:
 
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
-        result = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            cwd=str(cwd),
-            env=env,
-            timeout=self.session_timeout,
-        )
-
-        logfile.write_text(result.stdout, encoding="utf-8")
-
-        if result.returncode != 0:
-            logger.error(
-                "%s failed (rc=%d): %s",
-                session_name, result.returncode, result.stderr[-500:],
+        async def _run() -> tuple[int, str]:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(cwd),
+                env=env,
             )
+            t0 = time.monotonic()
+            comm_task = asyncio.create_task(proc.communicate(input=prompt.encode()))
 
-        return result.returncode, result.stdout
+            while not comm_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(comm_task), timeout=30)
+                except asyncio.TimeoutError:
+                    elapsed = self._fmt_elapsed(time.monotonic() - t0)
+                    self._progress(f"  {session_name} 実行中... ({elapsed})")
+
+            stdout, stderr = comm_task.result()
+            logfile.write_bytes(stdout)
+
+            if proc.returncode != 0:
+                logger.error(
+                    "%s failed (rc=%d): %s",
+                    session_name, proc.returncode, stderr.decode()[-500:],
+                )
+
+            return proc.returncode or 0, stdout.decode()
+
+        return asyncio.run(_run())
 
     # --- Prompt Building ---
 

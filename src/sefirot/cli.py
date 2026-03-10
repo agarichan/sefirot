@@ -10,6 +10,14 @@ from pathlib import Path
 import click
 
 
+class _FlushHandler(logging.StreamHandler):
+    """StreamHandler that flushes after every emit."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        self.flush()
+
+
 def _find_root() -> Path:
     """Find project root (directory containing .git/)."""
     cwd = Path.cwd()
@@ -45,11 +53,12 @@ def _find_milestones_file(root: Path, task_dir: str | None) -> Path:
 def main(verbose: bool) -> None:
     """Sefirot - Claude Code multi-agent orchestration framework."""
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
+    handler = _FlushHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
-    )
+    ))
+    logging.basicConfig(level=level, handlers=[handler])
 
 
 # --- Loop command (core) ---
