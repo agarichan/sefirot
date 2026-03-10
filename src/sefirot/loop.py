@@ -114,14 +114,18 @@ class LoopEngine:
         """Extract lifecycle directory name from source doc path."""
         source = data.get("source", "")
         if source:
-            return Path(source).parent.name
+            name = Path(source).parent.name
+            if name:
+                return name
         return "default"
 
     def _source_dir(self, data: dict) -> str:
         """Get source doc directory path (relative to root)."""
         source = data.get("source", "")
         if source:
-            return str(Path(source).parent)
+            parent = str(Path(source).parent)
+            if parent != ".":
+                return parent
         return "docs/tasks"
 
     def run(self) -> int:

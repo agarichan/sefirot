@@ -196,6 +196,27 @@ class TestLoopEngine:
         # planner は worktree で動かないので worktree の注意書きがないこと
         assert "worktree" not in section
 
+    def test_lifecycle_name_root_source_falls_back_to_default(self, project_dir: Path) -> None:
+        """source がルート直下のファイルの場合、lifecycle name は 'default' になる。"""
+        make_milestones(project_dir, [], source="sample_task.md")
+        engine = LoopEngine(project_dir)
+        data = engine.load_milestones()
+        assert engine._lifecycle_name(data) == "default"
+
+    def test_source_dir_root_source_falls_back_to_docs_tasks(self, project_dir: Path) -> None:
+        """source がルート直下のファイルの場合、source_dir は 'docs/tasks' になる。"""
+        make_milestones(project_dir, [], source="sample_task.md")
+        engine = LoopEngine(project_dir)
+        data = engine.load_milestones()
+        assert engine._source_dir(data) == "docs/tasks"
+
+    def test_lifecycle_name_empty_source_falls_back_to_default(self, project_dir: Path) -> None:
+        """source が空の場合、lifecycle name は 'default' になる。"""
+        make_milestones(project_dir, [])
+        engine = LoopEngine(project_dir)
+        data = engine.load_milestones()
+        assert engine._lifecycle_name(data) == "default"
+
     def test_question_queue_section_not_from_skill(self, project_dir: Path) -> None:
         """--from-skill なしのとき質問キューセクションは空。"""
         make_milestones(project_dir, [])
