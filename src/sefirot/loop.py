@@ -192,16 +192,39 @@ class LoopEngine:
 
     # --- Action Output ---
 
-    @staticmethod
-    def _print_action(action: str, message: str) -> None:
+    def _init_output(self) -> None:
+        """Initialize output log file for progress reporting.
+
+        When running inside Claude Code (CLAUDECODE=1), child claude processes
+        can hijack the parent's stdout. We write to a dedicated log file instead
+        and print its path so the caller can tail it.
+        """
+        self._output_log = self.sessions_dir / "loop-output.log"
+        self._output_fh = open(self._output_log, "w", encoding="utf-8")
+        # Print the log path to stdout before claude can hijack it
+        print(f"[SEFIROT:OUTPUT_LOG] {self._output_log}", flush=True)
+
+    def _emit(self, line: str) -> None:
+        """Write a line to the output log and flush."""
+        self._output_fh.write(line + "\n")
+        self._output_fh.flush()
+
+    def _print_action(self, action: str, message: str) -> None:
         """Print action directive for the caller (skill) to follow."""
-        print(f"\n[SEFIROT:ACTION] {action}", flush=True)
-        print(f"[SEFIROT:MESSAGE] {message}", flush=True)
+        self._emit(f"\n[SEFIROT:ACTION] {action}")
+        self._emit(f"[SEFIROT:MESSAGE] {message}")
+
+    def _progress(self, msg: str) -> None:
+        """Print a highly visible progress line (flushed immediately)."""
+        self._emit(f"[SEFIROT] {msg}")
 
     @staticmethod
-    def _progress(msg: str) -> None:
-        """Print a highly visible progress line to stdout (flushed immediately)."""
-        print(f"[SEFIROT] {msg}", flush=True)
+    def _build_shell_command(cmd: list[str], logfile: Path) -> str:
+        """Build a shell command string that redirects stdout/stderr to logfile."""
+        import shlex
+        escaped_cmd = " ".join(shlex.quote(str(c)) for c in cmd)
+        escaped_log = shlex.quote(str(logfile))
+        return f"{escaped_cmd} < /dev/null > {escaped_log} 2>&1"
 
     # --- Main Loop ---
 
@@ -215,6 +238,7 @@ class LoopEngine:
 
     def run(self) -> int:
         """Run the main loop. Returns exit code."""
+        self._init_output()
         self._progress(f"ループ開始: {self.task_dir}")
         data = self.load_milestones()
 
@@ -479,47 +503,42 @@ class LoopEngine:
             "--model", self.model,
             "--dangerously-skip-permissions",
             "--verbose",
+            "--team-name", f"sefirot-{task_id}",
+            prompt,
         ]
 
         logfile = self.sessions_dir / f"builder-{task_id}.log"
 
-        env = dict(os.environ)
-        env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            shell_cmd = self._build_shell_command(cmd, logfile)
+            proc = await asyncio.create_subprocess_shell(
+                shell_cmd,
                 cwd=str(self.root),
                 env=env,
             )
 
-            # Send prompt via stdin, with periodic heartbeat
+            # Wait for completion with periodic heartbeat
             t0 = time.monotonic()
-            comm_task = asyncio.create_task(proc.communicate(input=prompt.encode()))
-
-            while not comm_task.done():
+            while proc.returncode is None:
                 try:
-                    await asyncio.wait_for(asyncio.shield(comm_task), timeout=30)
+                    await asyncio.wait_for(proc.wait(), timeout=30)
                 except asyncio.TimeoutError:
                     elapsed_s = time.monotonic() - t0
                     if elapsed_s >= self.session_timeout:
-                        comm_task.cancel()
-                        raise
+                        proc.kill()
+                        await proc.wait()
+                        logger.error("Builder %s timed out after %ds", task_id, self.session_timeout)
+                        return 1
                     elapsed = self._fmt_elapsed(elapsed_s)
                     self._progress(f"  builder-{task_id} 実行中... ({elapsed})")
 
-            stdout, stderr = comm_task.result()
-
-            # Save session log
-            logfile.write_bytes(stdout)
-
             if proc.returncode != 0:
+                stderr_tail = logfile.read_text(encoding="utf-8", errors="replace")[-500:] if logfile.exists() else ""
                 logger.error(
                     "Builder %s failed (rc=%d): %s",
-                    task_id, proc.returncode, stderr.decode()[-500:],
+                    task_id, proc.returncode, stderr_tail,
                 )
             else:
                 # Mark task done with lock (reload-modify-save to prevent race)
@@ -527,9 +546,8 @@ class LoopEngine:
 
             return proc.returncode or 0
 
-        except asyncio.TimeoutError:
-            logger.error("Builder %s timed out after %ds", task_id, self.session_timeout)
-            proc.kill()
+        except Exception:
+            logger.exception("Builder %s unexpected error", task_id)
             return 1
 
     def _run_verifier(
@@ -588,41 +606,39 @@ class LoopEngine:
             "--model", self.model,
             "--dangerously-skip-permissions",
             "--verbose",
+            "--team-name", f"sefirot-{session_name}",
+            prompt,
         ]
 
         logfile = self.sessions_dir / f"{session_name}.log"
 
-        env = dict(os.environ)
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
         async def _run() -> tuple[int, str]:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            shell_cmd = self._build_shell_command(cmd, logfile)
+            proc = await asyncio.create_subprocess_shell(
+                shell_cmd,
                 cwd=str(cwd),
                 env=env,
             )
             t0 = time.monotonic()
-            comm_task = asyncio.create_task(proc.communicate(input=prompt.encode()))
 
-            while not comm_task.done():
+            while proc.returncode is None:
                 try:
-                    await asyncio.wait_for(asyncio.shield(comm_task), timeout=30)
+                    await asyncio.wait_for(proc.wait(), timeout=30)
                 except asyncio.TimeoutError:
                     elapsed = self._fmt_elapsed(time.monotonic() - t0)
                     self._progress(f"  {session_name} 実行中... ({elapsed})")
 
-            stdout, stderr = comm_task.result()
-            logfile.write_bytes(stdout)
-
             if proc.returncode != 0:
+                stderr_tail = logfile.read_text(encoding="utf-8", errors="replace")[-500:] if logfile.exists() else ""
                 logger.error(
                     "%s failed (rc=%d): %s",
-                    session_name, proc.returncode, stderr.decode()[-500:],
+                    session_name, proc.returncode, stderr_tail,
                 )
 
-            return proc.returncode or 0, stdout.decode()
+            stdout_data = logfile.read_text(encoding="utf-8", errors="replace") if logfile.exists() else ""
+            return proc.returncode or 0, stdout_data
 
         return asyncio.run(_run())
 
