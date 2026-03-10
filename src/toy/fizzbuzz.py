@@ -12,6 +12,10 @@ def fizzbuzz(n: int) -> list[str]:
     Returns:
         長さ n のリスト
     """
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise TypeError("n must be an integer")
+    if n < 0:
+        raise ValueError("n must be non-negative")
     result: list[str] = []
     for i in range(1, n + 1):
         if i % 15 == 0:
