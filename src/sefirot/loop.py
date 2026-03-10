@@ -63,6 +63,12 @@ class LoopEngine:
         # sessions_dir is set per-lifecycle in run()
         self.sessions_dir = root / ".sefirot" / "sessions"
 
+        # Pre-load CLAUDE.md content (if exists) to inject into prompts
+        self._claude_md_content = self._load_claude_md()
+
+        # Lock for milestones.json writes (prevents parallel builder race conditions)
+        self._milestones_lock = asyncio.Lock()
+
     def _discover_task_dir(self) -> Path:
         """Auto-discover task directory containing milestones.json."""
         tasks_root = self.root / "docs" / "tasks"
@@ -98,6 +104,25 @@ class LoopEngine:
         self._print_action("ERROR", msg)
         sys.exit(1)
 
+    def _load_claude_md(self) -> str:
+        """Load CLAUDE.md content if it exists, otherwise return notice."""
+        for candidate in [
+            self.root / "CLAUDE.md",
+            self.root / ".claude" / "CLAUDE.md",
+        ]:
+            if candidate.exists():
+                content = candidate.read_text(encoding="utf-8")
+                return (
+                    f"## CLAUDE.md（プロジェクトルール）\n\n"
+                    f"以下は `{candidate.relative_to(self.root)}` の内容です:\n\n"
+                    f"{content}\n"
+                )
+        return (
+            "## CLAUDE.md（プロジェクトルール）\n\n"
+            "このプロジェクトには CLAUDE.md がありません。"
+            "プロジェクト固有のルールは設計ドキュメントを参照してください。\n"
+        )
+
     def _find_prompts_dir(self) -> Path:
         """Find prompts directory - check project-local first, then package."""
         local = self.root / ".sefirot" / "prompts"
@@ -127,6 +152,20 @@ class LoopEngine:
             json.dumps(data, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+
+    async def _save_milestones_locked(self, task_id: str) -> None:
+        """Reload, mark task done, and save milestones.json with lock.
+
+        Prevents race conditions when parallel builders complete simultaneously.
+        """
+        async with self._milestones_lock:
+            data = self.load_milestones()
+            for ms in data.get("milestones", []):
+                for t in ms.get("tasks", []):
+                    if t.get("id") == task_id:
+                        t["done"] = True
+                        break
+            self.save_milestones(data)
 
     # --- Question Queue ---
 
@@ -407,6 +446,11 @@ class LoopEngine:
         """Run a single Builder agent in a worktree."""
         task_id = task["id"]
 
+        # Skip guard: re-check if task is already done (e.g. from a previous run)
+        if task.get("done"):
+            logger.info("Builder %s already done, skipping", task_id)
+            return 0
+
         prompt = self._build_builder_prompt(data, ms, task)
         worktree_name = f"sefirot-{task_id}"
 
@@ -449,9 +493,8 @@ class LoopEngine:
                     task_id, proc.returncode, stderr.decode()[-500:],
                 )
             else:
-                # Mark task done in milestones.json
-                task["done"] = True
-                self.save_milestones(data)
+                # Mark task done with lock (reload-modify-save to prevent race)
+                await self._save_milestones_locked(task_id)
 
             return proc.returncode or 0
 
@@ -624,6 +667,7 @@ class LoopEngine:
             "__SOURCE_CONTENT__": source_content,
             "__SOURCE_DIR__": source_dir,
             "__MILESTONES_JSON_PATH__": str(self.milestones_file),
+            "__CLAUDE_MD_SECTION__": self._claude_md_content,
             "__QUESTION_QUEUE_SECTION__": self._question_queue_section("planner"),
         }
 
@@ -653,6 +697,7 @@ class LoopEngine:
             "__PLAN_CONTENT__": plan_content,
             "__SESSIONS_DIR__": str(self.sessions_dir),
             "__MILESTONES_JSON_PATH__": str(self.milestones_file),
+            "__CLAUDE_MD_SECTION__": self._claude_md_content,
             "__QUESTION_QUEUE_SECTION__": self._question_queue_section("builder"),
         }
 
@@ -688,6 +733,7 @@ class LoopEngine:
             "__HANDOFF_NOTES__": handoff_notes,
             "__IS_MILESTONE_COMPLETE__": "true" if is_milestone_complete else "false",
             "__MILESTONES_JSON_PATH__": str(self.milestones_file),
+            "__CLAUDE_MD_SECTION__": self._claude_md_content,
             "__QUESTION_QUEUE_SECTION__": self._question_queue_section("verifier"),
         }
 
