@@ -11,9 +11,11 @@ import atexit
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -195,15 +197,17 @@ class LoopEngine:
     # --- Action Output ---
 
     def _init_output(self) -> None:
-        """Initialize output log and detect stdout capture file.
+        """Initialize output log and start stdout capture file watcher.
 
         Claude Code's background tasks capture stdout to a file. Child claude
         processes delete this file (see docs/claude-code-stdout-issue.md).
-        We detect the path via lsof and recreate it after each _emit call.
+        We detect the path via lsof and run a background thread that
+        recreates it immediately when deleted.
         """
         self._output_log = self.sessions_dir / "loop-output.log"
         self._output_fh = open(self._output_log, "w", encoding="utf-8")
         self._stdout_capture = self._detect_stdout_capture()
+        self._start_capture_watcher()
 
     @staticmethod
     def _detect_stdout_capture() -> str | None:
@@ -220,13 +224,31 @@ class LoopEngine:
             pass
         return None
 
+    def _start_capture_watcher(self) -> None:
+        """Start a daemon thread that restores the stdout capture file when deleted."""
+        if not self._stdout_capture:
+            return
+
+        def _watch() -> None:
+            while True:
+                try:
+                    if not os.path.exists(self._stdout_capture):
+                        shutil.copy2(self._output_log, self._stdout_capture)
+                except Exception:
+                    pass
+                time.sleep(0.5)
+
+        t = threading.Thread(target=_watch, daemon=True)
+        t.start()
+
     def _emit(self, line: str) -> None:
         """Write a line to the output log and sync to stdout capture file."""
+        if not hasattr(self, "_output_fh"):
+            return
         self._output_fh.write(line + "\n")
         self._output_fh.flush()
         if self._stdout_capture:
             try:
-                import shutil
                 shutil.copy2(self._output_log, self._stdout_capture)
             except Exception:
                 pass
@@ -297,6 +319,12 @@ class LoopEngine:
 
     def run(self) -> int:
         """Run the main loop. Returns exit code."""
+        # Set lifecycle-specific sessions directory before _init_output
+        self.sessions_dir = (
+            self.root / ".sefirot" / "sessions" / self._lifecycle_name()
+        )
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+
         self._init_output()
         self._cleanup_worktrees()
         atexit.register(self._cleanup_worktrees)
@@ -304,12 +332,6 @@ class LoopEngine:
         initial_head = self._get_head()
         self._progress(f"ループ開始: {self.task_dir}")
         data = self.load_milestones()
-
-        # Set lifecycle-specific sessions directory
-        self.sessions_dir = (
-            self.root / ".sefirot" / "sessions" / self._lifecycle_name()
-        )
-        self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
         milestones = data.get("milestones", [])
 
@@ -440,10 +462,15 @@ class LoopEngine:
             if self.from_skill and self.has_pending_questions(data):
                 return EXIT_QUESTIONS_PENDING
 
+            # Re-fetch wave tasks from reloaded ms (builders updated done flags)
+            reloaded_tasks = ms.get("tasks", [])
+            wave_tasks = [
+                t for t in reloaded_tasks if t.get("wave") == current_wave
+            ]
+
             # Determine if milestone will be complete after this wave
-            tasks_after = ms.get("tasks", [])
             undone_after_build = [
-                t for t in tasks_after
+                t for t in reloaded_tasks
                 if not t.get("done") and t.get("wave") != current_wave
             ]
             is_milestone_complete = len(undone_after_build) == 0
