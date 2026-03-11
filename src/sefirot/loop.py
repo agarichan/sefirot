@@ -228,12 +228,13 @@ class LoopEngine:
         """Start a daemon thread that restores the stdout capture file when deleted."""
         if not self._stdout_capture:
             return
+        capture_path = self._stdout_capture
 
         def _watch() -> None:
             while True:
                 try:
-                    if not os.path.exists(self._stdout_capture):
-                        shutil.copy2(self._output_log, self._stdout_capture)
+                    if not os.path.exists(capture_path):
+                        shutil.copy2(self._output_log, capture_path)
                 except Exception:
                     pass
                 time.sleep(0.5)

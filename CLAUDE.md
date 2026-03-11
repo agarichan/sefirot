@@ -5,6 +5,14 @@
 sefirot は Claude Code 上のマルチエージェントオーケストレーションフレームワーク。
 Planner / Builder / Verifier の3エージェントが Milestone 単位で設計→実装→検証のループを自動で回す。
 
+## Lint
+
+```bash
+ty check src/ tests/
+```
+
+- コード変更後は `ty check` を実行して型エラーがないことを確認する
+
 ## 検証コマンド
 
 ```bash
